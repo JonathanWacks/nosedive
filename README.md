@@ -11,7 +11,7 @@ seconds are left until the water, and it starts at 60.
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
 random column. Fly into one to pop it. A **bird** flaps across the shaft every 10-17 seconds;
-flying into it is fatal.
+flying into it is fatal. **Anvils** (small brown blocks) sit in the gaps between ledges; touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
 
 ## Build and run
 
@@ -79,7 +79,8 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls (1-8) |
+| `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls at the start (anvils raise it, up to `SPEED_MAX` = 3) |
+| `ANVIL_MASK` | 63 | 1 in (mask+1) gap rows holds an anvil |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
 | `TIME_LIMIT` | 60 | seconds from jump to ground; the level length follows from it |
 | `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |
@@ -87,7 +88,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
 | `DOUBLE_MASK` | 3 | 1 ledge row in (mask+1) has ledges on both walls |
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
-| `REACH` | derived (11 at speed 1) | how far, in columns, the diver can move between ledge rows; computed from `LEDGE_GAP_MIN`, `SCROLL_SPEED` and `MOVE_SPEED` |
+| `REACH1`-`REACH3` | derived (11, 4, 2) | how far, in columns, the diver can move between ledge rows at each speed; computed from `LEDGE_GAP_MIN` and `MOVE_SPEED`, and the generator switches to the current speed's value when an anvil is taken |
 | `WALL_W` | 3 | width of the brick walls in columns |
 | `LEDGE_MIN_LEN` | 8 | shortest floating ledge in columns (longest is 16) |
 | `MIN_FREE` | 5 | narrowest open space that counts as passable |
