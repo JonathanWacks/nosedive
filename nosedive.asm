@@ -76,7 +76,7 @@
 // ----------------------------------------------------------------------------
 //  Tunables
 // ----------------------------------------------------------------------------
-.const SCROLL_SPEED   = 2              // pixels per frame the shaft scrolls (1-8)
+.const SCROLL_SPEED   = 1              // pixels per frame the shaft scrolls (1-8)
 .const MOVE_SPEED     = 3              // pixels per frame the diver steers sideways
 .const TIME_LIMIT     = 60             // seconds from jump to ground
 .const LAND_LEAD      = 10             // rows of lead so the ground arrives as the clock hits 0
@@ -91,7 +91,7 @@
 .const END_GAP        = 18             // blank rows between last ledge and ground
 .const ANIM_DELAY     = 6              // frames per diver animation step
 
-.const BALLOON_SPEED  = 3              // pixels per frame balloons rise
+//.const BALLOON_SPEED  = 3              // pixels per frame balloons rise
 .const BALLOON_MIN_SEC = 3             // seconds between balloons: 3 to 6
 .const BALLOON_RANGE_SEC = 3           // (range x fps must be 128 or more)
 .const BALLOON_START_Y = 247           // just below the window: rises into view
@@ -1030,14 +1030,17 @@ ub_ptr:
     ldx #4
 ub_loop:
     lda b_y,x
-    beq ub_next
+    bne !+
+    jmp ub_next
+!:
     sec
-    sbc #BALLOON_SPEED
+    sbc b_speed,x
     cmp #BALLOON_TOP
     bcs ub_alive
     lda #0                             // floated off the top
     sta b_y,x
-    beq ub_next
+    sta b_speed,x
+    jmp ub_next
 ub_alive:
     sta b_y,x
     cmp #HIT_Y_MIN                     // level with the diver?
@@ -1064,6 +1067,7 @@ ub_right:
 ub_hit:
     lda #0                             // pop!
     sta b_y,x
+    sta b_speed,x
     txa
     pha
     lda #0
@@ -1194,12 +1198,16 @@ sb_edge:
     tay
     lda balloon_colors,y
     sta VIC_SPR3_COLOR,x
+    lda balloon_speeds,y
+    sta b_speed,x
     rts
 
 slot_bit:
     .byte %00001000, %00010000, %00100000, %01000000, %10000000
 balloon_colors:
     .byte 2, 4, 5, 10                  // red, purple, green, light red
+balloon_speeds:
+    .byte 3, 2, 3, 4                   // purple is slow, red and green are normal, light red  is fast
 
 
 // ----------------------------------------------------------------------------
@@ -1359,6 +1367,7 @@ msbmask:        .byte 0                // balloons' X bit 8s
 b_y:            .fill 5, 0             // balloon slots: Y (0 = free), X low, X bit 8
 b_xl:           .fill 5, 0
 b_xh:           .fill 5, 0
+b_speed:        .fill 5, 0             // balloon speeds
 player_x_lo:    .byte 0
 player_x_hi:    .byte 0
 

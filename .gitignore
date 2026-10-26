@@ -3,3 +3,4 @@
 *.dbg
 *.vs
 .DS_Store
+.source.txt
