@@ -1,0 +1,5 @@
+*.prg
+*.sym
+*.dbg
+*.vs
+.DS_Store
