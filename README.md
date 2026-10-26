@@ -11,7 +11,7 @@ seconds are left until the water, and it starts at 60.
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
 random column. Fly into one to pop it. A **bird** flaps across the shaft every 10-17 seconds;
-flying into it is fatal. **Anvils** (small brown blocks) sit in the gaps between ledges; touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
+flying into it is fatal. **Anvils** (small black blocks with a grey top) sit in the gaps between ledges, never directly above or below a ledge; touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
 
 ## Build and run
 
@@ -80,7 +80,8 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | Constant | Default | Meaning |
 |---|---|---|
 | `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls at the start (anvils raise it, up to `SPEED_MAX` = 3) |
-| `ANVIL_MASK` | 63 | 1 in (mask+1) gap rows holds an anvil |
+| `ANVIL_MASK` | 63 | 1 in (mask+1) gap rows holds an anvil (one on screen at a time) |
+| `COL_WOOD_LIGHT` | 12 | the shared %01 colour (mid grey): anvil tops, ledge edges, pail hoop, brick mortar |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
 | `TIME_LIMIT` | 60 | seconds from jump to ground; the level length follows from it |
 | `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |

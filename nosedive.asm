@@ -107,6 +107,8 @@
 .const REACH1         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 1 * MOVE_SPEED / 8) - 2
 .const REACH2         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 2 * MOVE_SPEED / 8) - 2
 .const REACH3         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 3 * MOVE_SPEED / 8) - 2
+.const ANVIL_CELL     = 8 + 0          // black cell colour for the anvil's column (multicolour %11)
+.const ANVIL_MARGIN   = 30             // no anvils this close to the pail (its water is %11 too)
 .const ANVIL_MASK     = 63             // 1 in 64 gap rows holds an anvil pick-up
                                        // columns the diver can surely cover between two ledge
                                        // rows (a row passes him in 29 pixels of scroll), less 2
@@ -169,7 +171,7 @@
 .const COL_BORDER     = 14             // light blue
 .const COL_BACKGROUND = 6              // blue
 .const COL_LEDGE      = 9              // brown: ledges and the pail (multicolour %10)
-.const COL_WOOD_LIGHT = 8              // orange: wood highlights (multicolour %01)
+.const COL_WOOD_LIGHT = 12             // orange: wood highlights (multicolour %01)
 .const COL_WATER      = 3              // cyan: the water (cell colour, multicolour %11)
 .const CELL_COLOUR    = 8 + COL_WATER  // colour RAM value: bit 3 = multicolour cell
 .const COL_BRICK      = 2              // red: brick walls (cell colour, multicolour %11)
@@ -365,7 +367,12 @@ ta_cell:
     lda #CH_SPACE                      // gone
     sta (ptr_dst),y
     inc ta_hit
+    tya                                // the colour goes back too
+    pha
+    jsr anvil_unpaint
     jsr speed_up
+    pla
+    tay
 ta_next:
     iny
     cpy ta_c1
@@ -572,6 +579,10 @@ iw_c:
     jsr put_wave                       // water ripple back to its first shape
     lda #START_GAP
     sta ledge_wait
+    lda #$ff
+    sta anv_col
+    lda #0
+    sta after_ledge
     lda #SCROLL_SPEED                  // anvils change this during a run
     sta speed
     jsr set_reach
@@ -837,6 +848,15 @@ nr_loop:
     bpl nr_loop
     lda #0
     sta row_ready
+    lda anv_col                        // age the anvil; it has scrolled off after 26 rows
+    cmp #$ff
+    beq nr_done
+    inc anv_age
+    lda anv_age
+    cmp #26
+    bcc nr_done
+    jmp anvil_unpaint
+nr_done:
     rts
 
 // ----------------------------------------------------------------------------
@@ -879,21 +899,6 @@ rb_walls:
     sta row_buf + 40 - WALL_W,x
     dex
     bpl rb_walls
-    rts
-
-// maybe_anvil: put an anvil pick-up at a random column of the row in row_buf (1 in 64)
-maybe_anvil:
-    jsr get_random
-    and #ANVIL_MASK
-    bne ma_no
-    jsr get_random
-    and #31
-    clc
-    adc #(PF_L + 1)
-    tax
-    lda #CH_ANVIL
-    sta row_buf,x
-ma_no:
     rts
 
 row_fill:
@@ -970,6 +975,81 @@ pail_kind:  .byte 0,  1,  2,  3,  3,  4,  3,  3,  3,  3,  4,  3,  3,  2,  5
 pail_a:     .byte 8,  8,  7,  8,  8,  9,  9,  9, 10, 10, 11, 11, 11, 12, 0
 pail_b:     .byte 31, 31, 32, 31, 31, 30, 30, 30, 29, 29, 28, 28, 28, 27, 39
 
+// maybe_anvil: put an anvil pick-up at a random column of the row in row_buf (1 in 64)
+maybe_anvil:
+    lda after_ledge                    // never right under a ledge ...
+    beq ma_below
+    lda #0
+    sta after_ledge
+    rts
+ma_below:
+    lda ledge_wait                     // ... or right on top of one
+    beq ma_no
+    lda anv_col                        // one anvil at a time
+    cmp #$ff
+    bne ma_no
+    lda rows_hi
+    bne ma_far
+    lda rows_lo
+    cmp #ANVIL_MARGIN
+    bcc ma_no
+ma_far:
+    jsr get_random
+    and #ANVIL_MASK
+    bne ma_no
+    jsr get_random
+    and #31
+    clc
+    adc #(PF_L + 1)
+    sta anv_col
+    tax
+    lda #CH_ANVIL
+    sta row_buf,x
+    lda #0
+    sta anv_age
+    lda #ANVIL_CELL                    // the anvil's column is painted black while it exists
+    jmp anvil_paint
+ma_no:
+    rts
+
+// anvil_paint: A = colour RAM value; fill the anvil's column with it
+anvil_paint:
+    sta ta_x
+    lda #<COLOR_RAM
+    clc
+    adc anv_col
+    sta ptr_col
+    lda #>COLOR_RAM
+    adc #0
+    sta ptr_col+1
+    ldx #25
+    ldy #0
+ap_loop:
+    lda ta_x
+    sta (ptr_col),y
+    lda ptr_col
+    clc
+    adc #40
+    sta ptr_col
+    bcc ap_nc
+    inc ptr_col+1
+ap_nc:
+    dex
+    bne ap_loop
+    rts
+
+// anvil_unpaint: restore the column's colour and forget the anvil
+anvil_unpaint:
+    lda anv_col
+    cmp #$ff
+    beq au_done
+    lda #CELL_COLOUR
+    jsr anvil_paint
+    lda #$ff
+    sta anv_col
+au_done:
+    rts
+
 // ----------------------------------------------------------------------------
 //  in_opening: carry set if the diver is wholly over the pail's water
 // ----------------------------------------------------------------------------
@@ -995,6 +1075,8 @@ io_no:
 //  time. Otherwise try again, and after TRIES attempts leave the row empty.
 // ----------------------------------------------------------------------------
 row_ledge:
+    lda #1
+    sta after_ledge                    // (no anvil in the next gap row)
     jsr get_random                     // blank rows before the next ledge row
     and #3
     clc
@@ -2107,7 +2189,7 @@ custom_glyphs:
     .byte $aa, $55, $55, $55, $55, $55, $55, $aa     // iron hoop (orange band)
     .byte $55, $aa, $aa, $aa, $aa, $aa, $aa, $55     // floating ledge (light edges)
     .byte $55, $fd, $fd, $fd, $55, $df, $df, $df     // brick wall: red bricks, orange mortar
-    .byte $55, $aa, $2a, $0a, $0a, $2a, $aa, $aa     // anvil: brown, orange top face
+    .byte $55, $55, $3f, $0f, $0f, $3f, $ff, $ff     // anvil: grey top face (%01), black body (%11)
 
 // ----------------------------------------------------------------------------
 //  get_random: A = random byte (SID voice 3 noise)
@@ -2218,6 +2300,9 @@ txt_retry:
 // ----------------------------------------------------------------------------
 speed:          .byte SCROLL_SPEED     // pixels per frame the shaft scrolls now
 reach_p1:       .byte REACH1 + 1       // REACH + 1 for the current speed
+anv_col:        .byte $ff              // column of the anvil on screen ($ff = none)
+anv_age:        .byte 0                // shifts since it arrived
+after_ledge:    .byte 0                // 1 = the previous row was a ledge row
 ta_row:         .byte 0
 ta_last:        .byte 0
 ta_c0:          .byte 0
