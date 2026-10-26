@@ -91,7 +91,6 @@
 .const END_GAP        = 18             // blank rows between last ledge and ground
 .const ANIM_DELAY     = 6              // frames per diver animation step
 
-//.const BALLOON_SPEED  = 3              // pixels per frame balloons rise
 .const BALLOON_MIN_SEC = 3             // seconds between balloons: 3 to 6
 .const BALLOON_RANGE_SEC = 3           // (range x fps must be 128 or more)
 .const BALLOON_START_Y = 247           // just below the window: rises into view
@@ -361,6 +360,7 @@ init_rows_done:
     ldx #4
 init_balloons:
     sta b_y,x
+    sta b_speed,x
     dex
     bpl init_balloons
     lda #7
@@ -1003,7 +1003,7 @@ rd_done:
 
 // ----------------------------------------------------------------------------
 //  Balloons. Five slots (sprites 3-7). b_y = 0 means the slot is free.
-//  They rise BALLOON_SPEED pixels a frame in front of the ledges. Touching
+//  They rise a few pixels a frame (balloon_speeds, by colour) in front of the ledges. Touching
 //  one removes it and scores 200.
 // ----------------------------------------------------------------------------
 update_balloons:

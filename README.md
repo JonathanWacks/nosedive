@@ -59,7 +59,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `SCROLL_SPEED` | 2 | pixels per frame the shaft scrolls (1-8) |
+| `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls (1-8) |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
 | `TIME_LIMIT` | 60 | seconds from jump to ground; the level length follows from it |
 | `LAND_LEAD` | 10 | rows of lead so the ground arrives as the timer hits 0 |
@@ -70,7 +70,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `LEDGE_GAP_MIN` | 7 | minimum blank rows between ledges (plus 0-3 random) |
 | `ANIM_DELAY` | 6 | frames per diver animation step |
 | `BALLOON_MIN_SEC` / `BALLOON_RANGE_SEC` | 3 / 3 | balloons appear every 3 to 6 seconds |
-| `BALLOON_SPEED` | 3 | pixels per frame balloons rise |
+| `balloon_speeds` | 3, 2, 3, 4 | table by balloon colour (red, purple, green, light red): pixels per frame it rises |
 | `BALLOON_POINTS_HI` | 2 | balloon score in hundreds (200) |
 | `LAND_BONUS_HI` | $10 | landing bonus in BCD hundreds (1000) |
 
