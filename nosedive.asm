@@ -115,8 +115,10 @@
 .const BIRD_RANGE_MASK = 7
 .const BIRD_SPEED     = 2              // pixels per frame across the screen
 .const BIRD_ANIM_DELAY = 5             // frames per wing beat step
-.const BIRD_Y_MIN     = 70             // bird flies at a random height from here ...
-.const BIRD_Y_MASK    = 127            // ... up to this much lower
+.const BIRD_Y_MIN     = 165            // bird starts below the diver, at a random height from here ...
+.const BIRD_Y_MASK    = 63             // ... up to this much lower
+.const BIRD_RISE      = 1              // pixels per frame it rises (same as the scroll, so it drifts up the shaft)
+.const BIRD_Y_TOP     = 50             // gone once it has risen above this
 .const BIRD_HIT_Y_MIN = 128            // bird sprite Y range that overlaps the diver
 .const BIRD_HIT_Y_MAX = 153
 .const BIRD_HIT_DX    = 18             // and how many pixels sideways
@@ -1639,6 +1641,14 @@ bird_left:
 bird_left_gone:
     jmp bird_gone                      // behind the left border
 bird_flap:
+    sec                                // rise up the shaft, so it crosses the diver's
+    lda bird_y                         // height once and can be dodged sideways
+    sbc #BIRD_RISE
+    sta bird_y
+    cmp #BIRD_Y_TOP
+    bcs bird_rise_ok
+    jmp bird_gone
+bird_rise_ok:
     dec bird_timer
     bne bird_show
     lda #BIRD_ANIM_DELAY

@@ -47,7 +47,7 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
 - **The HUD** is two hardware sprites (1 = score, 2 = time), drawn double size from a 5x7 font. The
   program redraws their pixels only when a number changes, one sprite per frame and never on a
   frame that is busy scrolling, so they stay still while the shaft scrolls.
-- **The bird** is sprite 7. It enters from a random side at a random height, moves `BIRD_SPEED`
+- **The bird** is sprite 7. It enters from a random side below the diver, climbs with the scroll so it crosses the diver's height only briefly (so it can always be dodged sideways), moves `BIRD_SPEED`
   pixels per frame, flaps through three frames and bobs up and down with the flap. Hits are tested
   in code (bounding box), and it is cleared when it leaves the screen. Only one bird at a time; the
   wait to the next one counts down while none is on screen.
@@ -94,7 +94,8 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `BIRD_MIN_SEC` / `BIRD_RANGE_MASK` | 10 / 7 | a bird every 10 to 17 seconds |
 | `BIRD_SPEED` | 2 | pixels per frame the bird flies |
 | `BIRD_ANIM_DELAY` | 5 | frames per flap step |
-| `BIRD_Y_MIN` / `BIRD_Y_MASK` | 70 / 127 | bird height is 70 plus a random 0-127 |
+| `BIRD_Y_MIN` / `BIRD_Y_MASK` | 165 / 63 | bird starts below the diver at 165 plus a random 0-63 |
+| `BIRD_RISE` | 1 | pixels per frame the bird climbs; it vanishes above `BIRD_Y_TOP` (50) |
 | `BIRD_HIT_*` | | bounding box used for the bird hit test |
 | `LEDGE_GAP_MIN` | 7 | minimum blank rows between ledges (plus 0-3 random) |
 | `ANIM_DELAY` | 6 | frames per diver animation step |
