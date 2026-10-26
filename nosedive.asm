@@ -1,11 +1,12 @@
 // ============================================================================
 //  NOSEDIVE  -  Commodore 64  -  Kick Assembler
-//  Version 0.3
+//  Version 0.4
 //
 //  You have jumped off the platform and are diving head first down a shaft.
 //  Steer left and right (joystick in port 2) to dodge the ledges that stick
 //  out of the left and right walls. Touch one and it's game over.
-//  Reach the ground at the bottom and you win - before the clock runs out
+//  Reach the bottom and dive into the big wooden pail of water to win - there
+//  is a splash. Miss the pail, or clip its rim, and it's game over.
 //  (the countdown in the top right corner is the time left to the ground).
 //  Some rows have ledges on BOTH walls, leaving a narrow gap to steer through.
 //  Score: +10 every second, +1000 for landing, +200 for each balloon you
@@ -29,6 +30,8 @@
 //  Hardware addresses
 // ----------------------------------------------------------------------------
 .const SCREEN         = $0400
+.const CHARSET        = $2800          // our RAM copy of the character set
+.const CPU_PORT       = $01            // bit 2 = I/O visible (0 = character ROM)
 .const COLOR_RAM      = $d800
 .const SPRITE_PTR     = $07f8          // sprite 0 data pointer
 
@@ -51,6 +54,8 @@
 .const VIC_SPR_BGHIT  = $d01f          // sprite/background collisions (read clears)
 .const VIC_BORDER     = $d020
 .const VIC_BACKGROUND = $d021
+.const VIC_MC1        = $d022          // multicolour text colour %01
+.const VIC_MC2        = $d023          // multicolour text colour %10
 .const VIC_SPR0_COLOR = $d027
 .const VIC_SPR1_COLOR = $d028
 .const VIC_SPR2_COLOR = $d029
@@ -98,6 +103,12 @@
 .const BALLOON_ANIM_DELAY = 8          // frames per balloon animation step
 .const BALLOON_POINTS_HI = 2           // 200 points (BCD hundreds)
 .const LAND_BONUS_HI  = $10            // 1000 points (BCD thousands)
+.const LAND_X_MIN     = 96             // diver must be wholly over the water: X from
+.const LAND_X_MAX     = 248            // 96 to 248 (pail opening, columns 9-30)
+.const SPLASH_FRAMES  = 100            // length of the splash scene
+.const SINK_FRAMES    = 30             // the shaft keeps scrolling this long: diver sinks
+.const SURFACE_Y      = 159            // screen Y of the water when the diver touches it
+.const WAVE_DELAY     = 8              // frames per water ripple step
 .const HIT_Y_MIN      = 127            // balloon sprite Y range that overlaps the diver
 .const HIT_Y_MAX      = 160
 .const HIT_DX         = 20             // and how many pixels sideways
@@ -113,12 +124,22 @@
 .const X_MAX          = 319            // rightmost sprite X that is fully on screen
 
 .const CH_SPACE       = $20
-.const CH_SOLID       = $a0            // reverse space = solid block
+.const CH_SOLID       = $a0            // ledge / floor: solid brown (redefined below)
+.const CH_WOOD_A      = $c0            // pail characters (redefined below)
+.const CH_WOOD_B      = $c1
+.const CH_RIM         = $c2
+.const CH_SURF_A      = $c3            // water surface, two wave shapes (rippled)
+.const CH_SURF_B      = $c4
+.const CH_WATER       = $c5
+.const CH_HOOP        = $c6
 .const ROW_LAST       = SCREEN + 24*40 // the row new ledges are built on
 
 .const COL_BORDER     = 14             // light blue
 .const COL_BACKGROUND = 6              // blue
-.const COL_LEDGE      = 9              // brown
+.const COL_LEDGE      = 9              // brown: ledges and the pail (multicolour %10)
+.const COL_WOOD_LIGHT = 8              // orange: wood highlights (multicolour %01)
+.const COL_WATER      = 3              // cyan: the water (cell colour, multicolour %11)
+.const CELL_COLOUR    = 8 + COL_WATER  // colour RAM value: bit 3 = multicolour cell
 .const COL_DIVER      = 7              // yellow
 .const COL_TEXT       = 1              // white
 .const COL_TIMER      = 1              // white
@@ -148,11 +169,19 @@ start:
     lda #$80
     sta SID_V3_CONTROL
 
-    // VIC: 40 columns, screen at $0400, ROM character set
-    lda #$c8
+    // Character set: ROM copy in RAM plus our own ledge/pail characters
+    jsr setup_charset
+
+    // VIC: 40 columns, multicolour text, screen at $0400, characters at $2800.
+    // Game cells are multicolour; text cells (colour 0-7) stay hi-res.
+    lda #$d8
     sta VIC_CTRL2
-    lda #$14
+    lda #$1a
     sta VIC_MEMORY
+    lda #COL_WOOD_LIGHT
+    sta VIC_MC1
+    lda #COL_LEDGE
+    sta VIC_MC2
 
     // Sprite 0 is the diver: hires, in front of the background, normal size
     lda #0
@@ -213,18 +242,27 @@ new_game:
 // ----------------------------------------------------------------------------
 game_loop:
     jsr wait_frame                     // just after the display window ends
+    lda splash
+    beq flying_frame
+    jmp splash_frame                   // already in the water
 
+flying_frame:
     // Did the diver touch anything during the frame we just displayed?
     lda VIC_SPR_BGHIT
     and #1
     beq still_flying
     lda ground_seen
-    bne landed                         // it was the ground: safe landing
-    jmp crashed                        // it was a ledge: ouch
+    beq crash_far                      // a ledge: ouch
+    jsr in_opening                     // the pail: did we hit the water?
+    bcc crash_far                      // rim, wall or floor: ouch
+    jmp start_splash
+crash_far:
+    jmp crashed
 
 still_flying:
     jsr move_diver
     jsr animate_diver
+    jsr animate_water
     jsr update_timer
     jsr update_balloons
     jsr scroll_shaft
@@ -235,10 +273,6 @@ still_flying:
 //  End of game
 // ----------------------------------------------------------------------------
 landed:
-    lda #0                             // landing bonus
-    ldx #LAND_BONUS_HI
-    jsr add_score
-    jsr render_score                   // show it right away
     lda #COL_WIN
     sta VIC_BORDER
     lda #<txt_landed
@@ -301,7 +335,7 @@ clear_screen:
     inx
     bne clear_screen
 
-    lda #COL_LEDGE                     // one colour for everything: never scrolled
+    lda #CELL_COLOUR                   // one colour for everything: never scrolled
     ldx #0
 clear_colour:
     sta COLOR_RAM,x
@@ -326,6 +360,13 @@ clear_colour:
     lda #0
     sta anim_index
     sta ground_seen
+    sta splash
+    sta pail_step
+    sta wave_phase
+    sta VIC_SPR_PRIO                   // diver in front of the shaft again
+    lda #WAVE_DELAY
+    sta wave_timer
+    jsr put_wave                       // water ripple back to its first shape
     lda #START_GAP
     sta ledge_wait
     lda #0                             // before the first ledge anything is reachable
@@ -568,11 +609,11 @@ shift_chunk_3:
 // ----------------------------------------------------------------------------
 //  new_row: build the next bottom row. The level is a fixed number of rows
 //  (rows_lo/hi counts them down) so it lasts TIME_LIMIT seconds: random ledges,
-//  then END_GAP clear rows, then solid ground.
+//  then END_GAP clear rows, then the pail, then a solid floor.
 // ----------------------------------------------------------------------------
 new_row:
     lda ground_seen
-    bne row_ground
+    bne row_pail
     lda rows_lo                        // 16-bit decrement of the rows left
     bne nr_dec
     dec rows_hi
@@ -580,7 +621,7 @@ nr_dec:
     dec rows_lo
     lda rows_lo
     ora rows_hi
-    beq row_ground                     // that was the last row: ground
+    beq row_pail                       // that was the last row: the pail
     lda rows_hi
     bne nr_ledges
     lda rows_lo
@@ -588,7 +629,9 @@ nr_dec:
     bcc row_blank                      // run-out above the ground
 nr_ledges:
     lda ledge_wait
-    beq row_ledge
+    bne nr_wait
+    jmp row_ledge
+nr_wait:
     dec ledge_wait
 
 row_blank:
@@ -601,11 +644,88 @@ row_fill_loop:
     bpl row_fill_loop
     rts
 
-row_ground:
+// ----------------------------------------------------------------------------
+//  row_pail: the pail and floor, one table row per screen row. Kinds:
+//  0 = water surface between rim caps, 1 = water between rim caps,
+//  2 = front rim, 3 = wooden side, 4 = iron hoop, 5 = floor.
+// ----------------------------------------------------------------------------
+.const PAIL_ROWS      = 15
+
+row_pail:
     lda #1
     sta ground_seen
-    lda #CH_SOLID
+    ldx pail_step
+    cpx #(PAIL_ROWS-1)
+    beq rp_draw                        // the last entry (floor) repeats forever
+    inc pail_step
+rp_draw:
+    lda pail_kind,x
+    cmp #5
+    bne rp_shape
+    lda #CH_SOLID                      // floor
     jmp row_fill
+rp_shape:
+    sta pk
+    lda pail_a,x
+    sta pa
+    lda pail_b,x
+    clc
+    adc #1
+    sta pb                             // one past the last column
+    jsr row_blank
+    ldx pa
+rp_fill:
+    txa
+    and #1
+    bne rp_odd
+    ldy pk
+    lda char_even,y
+    jmp rp_put
+rp_odd:
+    ldy pk
+    lda char_odd,y
+rp_put:
+    sta ROW_LAST,x
+    inx
+    cpx pb
+    bne rp_fill
+    lda pk
+    cmp #2
+    bcs rp_done
+    lda #CH_RIM                        // rim caps at both ends of the water
+    ldx pa
+    sta ROW_LAST,x
+    ldx pb
+    dex
+    sta ROW_LAST,x
+rp_done:
+    rts
+
+//               surface,      water,    rim,     wood,       hoop
+char_even:  .byte CH_SURF_A,  CH_WATER, CH_RIM,  CH_WOOD_A,  CH_HOOP
+char_odd:   .byte CH_SURF_B,  CH_WATER, CH_RIM,  CH_WOOD_B,  CH_HOOP
+
+// The pail is 24 columns wide at the top, tapering to 16 at the base
+pail_kind:  .byte 0,  1,  2,  3,  3,  4,  3,  3,  3,  3,  4,  3,  3,  2,  5
+pail_a:     .byte 8,  8,  7,  8,  8,  9,  9,  9, 10, 10, 11, 11, 11, 12, 0
+pail_b:     .byte 31, 31, 32, 31, 31, 30, 30, 30, 29, 29, 28, 28, 28, 27, 39
+
+// ----------------------------------------------------------------------------
+//  in_opening: carry set if the diver is wholly over the pail's water
+// ----------------------------------------------------------------------------
+in_opening:
+    lda player_x_hi
+    bne io_no
+    lda player_x_lo
+    cmp #LAND_X_MIN
+    bcc io_no
+    cmp #(LAND_X_MAX+1)
+    bcs io_no
+    sec
+    rts
+io_no:
+    clc
+    rts
 
 // ----------------------------------------------------------------------------
 //  row_ledge: build a ledge row. Pick a candidate (single ledge from one wall,
@@ -1211,6 +1331,241 @@ balloon_speeds:
 
 
 // ----------------------------------------------------------------------------
+//  The splash. start_splash: the diver has touched the water. Score the
+//  landing, put the diver behind the water (so the pail swallows him as the
+//  shaft keeps scrolling for SINK_FRAMES), and throw up five droplets, using
+//  the balloon sprites and arrays: b_y = Y, b_xl/b_xh = X, b_speed = vertical
+//  speed (signed, negative = up), b_vx = horizontal speed (signed).
+// ----------------------------------------------------------------------------
+start_splash:
+    lda #SPLASH_FRAMES
+    sta splash
+    lda #1
+    sta VIC_SPR_PRIO                   // diver (sprite 0) behind the water
+    lda #SURFACE_Y
+    sta water_y
+    lda #0
+    ldx #LAND_BONUS_HI
+    jsr add_score
+    ldx #4
+ss_loop:
+    lda player_x_lo
+    sta b_xl,x
+    lda player_x_hi
+    sta b_xh,x
+    lda splash_dx,x
+    jsr add_drop_x                     // start beside the diver
+    lda water_y                        // start just above the water
+    sec
+    sbc #18
+    sta b_y,x
+    lda splash_vy,x
+    sta b_speed,x
+    lda splash_vx,x
+    sta b_vx,x
+    lda splash_colors,x
+    sta VIC_SPR3_COLOR,x
+    dex
+    bpl ss_loop
+    // fall into the first splash frame
+
+splash_frame:
+    jsr animate_water
+    jsr splash_update
+    lda splash
+    cmp #(SPLASH_FRAMES - SINK_FRAMES)
+    bcc sf_still                       // the diver is under: stop scrolling
+    jsr scroll_shaft
+    lda water_y                        // the water rises with the shaft
+    sec
+    sbc #SCROLL_SPEED
+    sta water_y
+sf_still:
+    jsr hud_update
+    dec splash
+    beq sf_end
+    jmp game_loop
+sf_end:
+    jmp landed
+
+// splash_update: move the droplets (ballistic arcs) and show them
+splash_update:
+    lda splash
+    cmp #(SPLASH_FRAMES - SINK_FRAMES)
+    lda #7
+    bcs su_emask
+    lda #6                             // fully under: hide the diver sprite
+su_emask:
+    sta emask
+    lda water_y                        // droplets vanish into the water
+    sec
+    sbc #14
+    sta tmpv2
+    lda #0
+    sta msbmask
+    ldx #4
+su_loop:
+    lda b_y,x
+    beq su_next
+    clc
+    adc b_speed,x                      // Y += vertical speed (signed)
+    sta b_y,x
+    lda splash
+    and #3
+    bne su_move
+    inc b_speed,x                      // gravity, every 4th frame
+su_move:
+    lda b_speed,x
+    bmi su_show                        // still rising
+    lda b_y,x
+    cmp tmpv2
+    bcc su_show
+    lda #0                             // back in the water
+    sta b_y,x
+    beq su_next
+su_show:
+    lda b_vx,x
+    jsr add_drop_x
+    txa
+    asl
+    tay
+    lda b_y,x
+    sta VIC_SPR3_Y,y
+    lda b_xl,x
+    sta VIC_SPR3_X,y
+    lda #(drop_frame/64)
+    sta SPRITE_PTR3,x
+    lda emask
+    ora slot_bit,x
+    sta emask
+    lda b_xh,x
+    beq su_next
+    lda msbmask
+    ora slot_bit,x
+    sta msbmask
+su_next:
+    dex
+    bpl su_loop
+    lda emask
+    sta VIC_SPR_ENABLE
+    jmp update_sprite_x
+
+// add_drop_x: slot X's 9-bit X position += A (signed). Keeps X.
+add_drop_x:
+    sta tmpv
+    clc
+    adc b_xl,x
+    sta b_xl,x
+    lda tmpv
+    bmi adx_neg
+    lda #0
+    beq adx_hi
+adx_neg:
+    lda #$ff
+adx_hi:
+    adc b_xh,x
+    and #1
+    sta b_xh,x
+    rts
+
+splash_dx:      .byte -18, -8, 0, 8, 18
+splash_vx:      .byte -2, -1, 0, 1, 2
+splash_vy:      .byte -3, -4, -5, -4, -3
+splash_colors:  .byte 1, 3, 14, 3, 1   // white, cyan, light blue
+
+// ----------------------------------------------------------------------------
+//  Water ripple: the two surface characters swap shape every WAVE_DELAY frames
+// ----------------------------------------------------------------------------
+animate_water:
+    dec wave_timer
+    bne aw_done
+    lda #WAVE_DELAY
+    sta wave_timer
+    lda wave_phase
+    eor #1
+    sta wave_phase
+put_wave:
+    lda wave_phase
+    asl
+    asl
+    asl
+    asl                                // 16 bytes per phase
+    tax
+    ldy #0
+pw_loop:
+    lda wave_data,x
+    sta CHARSET + CH_SURF_A*8,y
+    inx
+    iny
+    cpy #16
+    bne pw_loop
+aw_done:
+    rts
+
+wave_data:
+    .byte $00, $0c, $33, $ff, $ff, $ff, $ff, $ff     // surface A
+    .byte $00, $30, $cc, $ff, $ff, $ff, $ff, $ff     // surface B
+    .byte $00, $30, $cc, $ff, $ff, $ff, $ff, $ff     // (phase 2: swapped)
+    .byte $00, $0c, $33, $ff, $ff, $ff, $ff, $ff
+
+// ----------------------------------------------------------------------------
+//  setup_charset: copy the ROM characters to RAM (so text still works), then
+//  redefine the ledge/floor block and add the pail characters. These are
+//  multicolour characters: each 2-pixel pair is %00 background, %01 orange,
+//  %10 brown or %11 the cell colour (water). Pairs %10 and %11 count as
+//  solid for sprite collisions and hide sprites that are set behind them.
+// ----------------------------------------------------------------------------
+setup_charset:
+    lda CPU_PORT
+    and #%11111011                     // character ROM visible at $d000
+    sta CPU_PORT
+    ldx #0
+sc_copy:
+    lda $d000,x
+    sta CHARSET,x
+    lda $d100,x
+    sta CHARSET+$100,x
+    lda $d200,x
+    sta CHARSET+$200,x
+    lda $d300,x
+    sta CHARSET+$300,x
+    lda $d400,x
+    sta CHARSET+$400,x
+    lda $d500,x
+    sta CHARSET+$500,x
+    lda $d600,x
+    sta CHARSET+$600,x
+    lda $d700,x
+    sta CHARSET+$700,x
+    inx
+    bne sc_copy
+    lda CPU_PORT
+    ora #%00000100                     // I/O back
+    sta CPU_PORT
+    ldx #7
+sc_solid:
+    lda #$aa                           // all %10: solid brown
+    sta CHARSET + CH_SOLID*8,x
+    dex
+    bpl sc_solid
+    ldx #(7*8 - 1)
+sc_custom:
+    lda custom_glyphs,x
+    sta CHARSET + CH_WOOD_A*8,x
+    dex
+    bpl sc_custom
+    rts
+
+custom_glyphs:
+    .byte $a9, $a9, $a9, $a9, $a9, $a9, $a9, $a9     // wood plank
+    .byte $a6, $a6, $a6, $a6, $a6, $a6, $a6, $a6     // wood plank, grain elsewhere
+    .byte $55, $aa, $aa, $aa, $aa, $aa, $a9, $a9     // rim
+    .byte $00, $0c, $33, $ff, $ff, $ff, $ff, $ff     // water surface A
+    .byte $00, $30, $cc, $ff, $ff, $ff, $ff, $ff     // water surface B
+    .byte $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff     // water
+    .byte $aa, $55, $55, $55, $55, $55, $55, $aa     // iron hoop (orange band)
+
+// ----------------------------------------------------------------------------
 //  get_random: A = random byte (SID voice 3 noise)
 // ----------------------------------------------------------------------------
 get_random:
@@ -1341,6 +1696,14 @@ score_lo:       .byte 0                // BCD: tens, units
 score_dirty:    .byte 0                // HUD sprites needing a redraw
 time_dirty:     .byte 0
 shifted:        .byte 0                // 1 if this frame shifted the screen
+splash:         .byte 0                // frames of splash left (0 = not landed yet)
+pail_step:      .byte 0                // which pail row is next
+pk:             .byte 0
+pa:             .byte 0
+pb:             .byte 0
+wave_timer:     .byte 0
+wave_phase:     .byte 0
+water_y:        .byte 0                // screen Y of the water surface during the splash
 score_hi:       .byte 0                // BCD: thousands, hundreds
 dig0:           .byte 0                // glyph numbers for render_digits
 dig1:           .byte 0
@@ -1368,6 +1731,7 @@ b_y:            .fill 5, 0             // balloon slots: Y (0 = free), X low, X 
 b_xl:           .fill 5, 0
 b_xh:           .fill 5, 0
 b_speed:        .fill 5, 0             // balloon speeds
+b_vx:           .fill 5, 0             // droplet sideways speeds
 player_x_lo:    .byte 0
 player_x_hi:    .byte 0
 
@@ -1529,4 +1893,17 @@ score_sprite:
 time_sprite:
     .fill 64, 0
 
-.errorif score_sprite + 128 > $4000, "Sprite data must end below $4000"
+// Splash droplet: a small round blob in the middle of the sprite
+drop_frame:
+    .fill 18, 0
+    .byte %00000000, %00111100, %00000000   // ..........####..........
+    .byte %00000000, %01111110, %00000000   // .........######.........
+    .byte %00000000, %11111111, %00000000   // ........########........
+    .byte %00000000, %11111111, %00000000   // ........########........
+    .byte %00000000, %11111111, %00000000   // ........########........
+    .byte %00000000, %11111111, %00000000   // ........########........
+    .byte %00000000, %01111110, %00000000   // .........######.........
+    .byte %00000000, %00111100, %00000000   // ..........####..........
+    .fill 22, 0
+
+.errorif drop_frame + 64 > CHARSET, "Sprite data must end before the character set at $2800"

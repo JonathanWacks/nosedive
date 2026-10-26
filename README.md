@@ -4,8 +4,8 @@ A head-first diving game for the Commodore 64, written in [Kick Assembler](http:
 
 You've jumped off the platform and you're diving head first down a shaft. Ledges stick out of the
 left and right walls at random. Steer left and right to dodge them, touch one and it's game over.
-Reach the ground at the bottom and you win. A countdown in the bottom right corner shows how many
-seconds are left until the ground, and it starts at 60.
+Reach the bottom and dive into a big wooden pail of water to win. Miss the pail or clip its rim and it's game over. A countdown in the bottom right corner shows how many
+seconds are left until the water, and it starts at 60.
 
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
@@ -43,13 +43,21 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   its string wiggles the other. Touching is tested in code against the diver's position. Score is
   kept in decimal (BCD) and stops at 9999.
 - **The timer** works like this: The program detects PAL or NTSC at startup, counts 50 or 60 frames per
-  second, and sizes the level (a fixed number of rows) so the ground arrives as the clock reaches 0.
+  second, and sizes the level (a fixed number of rows) so the water arrives as the clock reaches 0.
 - **The diver** is hardware sprite 0, held in the middle of the screen, with three animation
   frames played as 0, 1, 2, 1. It moves sideways only.
 - **Collision** uses the VIC sprite-to-background collision register, so it matches exactly
   what you see.
-- **The ending.** After the last ledge there is a clear run-out, then solid ground scrolls up
-  to meet the diver. Touching the ground is a safe landing rather than a crash.
+- **The pail.** The screen uses multicolour text with a RAM copy of the character set, plus a few
+  redefined characters: brown ledge blocks, wooden planks, an iron hoop, a rim, and two wave
+  shapes that swap every few frames to ripple the water. After the last ledge there is a clear
+  run-out, then the pail scrolls up (rim, water, tapering wooden body) with a floor under it.
+  The diver counts as landed if the sprite is wholly over the water (`LAND_X_MIN`-`LAND_X_MAX`);
+  touching the rim, the sides or the floor is a crash.
+- **The splash.** On landing the diver is put behind the pail's foreground pixels, so as the shaft
+  keeps scrolling for `SINK_FRAMES` the pail swallows him. Five droplets (the balloon sprites,
+  reused) fly up in arcs and fall back into the rising water, then the landed screen appears.
+  The landing bonus is scored at the moment of impact.
 
 A run takes `TIME_LIMIT` seconds (60 by default) on both PAL and NTSC machines.
 
@@ -62,7 +70,9 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls (1-8) |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
 | `TIME_LIMIT` | 60 | seconds from jump to ground; the level length follows from it |
-| `LAND_LEAD` | 10 | rows of lead so the ground arrives as the timer hits 0 |
+| `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |
+| `SPLASH_FRAMES` / `SINK_FRAMES` | 100 / 30 | length of the splash scene / frames the shaft keeps scrolling while the diver sinks |
+| `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
 | `DOUBLE_MASK` | 3 | 1 ledge row in (mask+1) has ledges on both walls |
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
 | `REACH` | 3 | how far, in columns, a gap may be from the previous one |
@@ -84,5 +94,6 @@ raise `SCROLL_SPEED` or lengthen ledges, the spacing may need to grow with it.
 |---|---|
 | `$0400` | screen RAM (the game scrolls this) |
 | `$0801` | BASIC loader, then the program |
-| `$2000` | sprite data: diver frames, balloon frames, then the score and time sprites (outside `$1000-$1fff`, where the VIC sees ROM) |
+| `$2000` | sprite data: diver frames, balloon frames, score and time sprites, splash droplet (outside `$1000-$1fff`, where the VIC sees ROM) |
+| `$2800` | character set: ROM copy plus the ledge and pail characters, built at startup |
 | `$d800` | colour RAM, set once |
