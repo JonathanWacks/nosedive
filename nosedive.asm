@@ -1,11 +1,13 @@
 // ============================================================================
 //  NOSEDIVE  -  Commodore 64  -  Kick Assembler
-//  Version 0.1
+//  Version 0.2
 //
 //  You have jumped off the platform and are diving head first down a shaft.
 //  Steer left and right (joystick in port 2) to dodge the ledges that stick
 //  out of the left and right walls. Touch one and it's game over.
-//  Reach the ground at the bottom and you win.
+//  Reach the ground at the bottom and you win - before the clock runs out
+//  (the countdown in the top right corner is the time left to the ground).
+//  Some rows have ledges on BOTH walls, leaving a narrow gap to steer through.
 //
 //  How the scrolling works
 //  -----------------------
@@ -28,6 +30,10 @@
 
 .const VIC_SPR0_X     = $d000
 .const VIC_SPR0_Y     = $d001
+.const VIC_SPR1_X     = $d002          // timer, tens digit
+.const VIC_SPR1_Y     = $d003
+.const VIC_SPR2_X     = $d004          // timer, ones digit
+.const VIC_SPR2_Y     = $d005
 .const VIC_SPR_XMSB   = $d010
 .const VIC_CTRL1      = $d011          // bits 0-2 = vertical fine scroll
 .const VIC_RASTER     = $d012
@@ -42,6 +48,10 @@
 .const VIC_BORDER     = $d020
 .const VIC_BACKGROUND = $d021
 .const VIC_SPR0_COLOR = $d027
+.const VIC_SPR1_COLOR = $d028
+.const VIC_SPR2_COLOR = $d029
+.const SPRITE_PTR1    = $07f9
+.const SPRITE_PTR2    = $07fa
 
 .const SID_V3_FREQ_LO = $d40e
 .const SID_V3_FREQ_HI = $d40f
@@ -60,7 +70,12 @@
 // ----------------------------------------------------------------------------
 .const SCROLL_SPEED   = 2              // pixels per frame the shaft scrolls (1-8)
 .const MOVE_SPEED     = 3              // pixels per frame the diver steers sideways
-.const LEDGE_COUNT    = 80             // ledges in the level (about 60s on PAL)
+.const TIME_LIMIT     = 60             // seconds from jump to ground
+.const LAND_LEAD      = 10             // rows of lead so the ground arrives as the clock hits 0
+.const DOUBLE_MASK    = 3              // 1 ledge row in 4 has ledges on both walls
+.const DOUBLE_GAP_MIN = 6              // narrow gap is 6-9 columns wide
+.const REACH          = 3              // next gap may be at most 3 columns from the last
+.const TRIES          = 8              // attempts to find a fair ledge row
 .const LEDGE_MIN_LEN  = 11             // ledges are 11-21 columns long
 .const LEDGE_GAP_MIN  = 7              // blank rows between ledges: 7-10, so one
                                        // ledge every 8-11 rows
@@ -68,6 +83,12 @@
 .const END_GAP        = 18             // blank rows between last ledge and ground
 .const ANIM_DELAY     = 6              // frames per diver animation step
 
+.const TIMER_Y        = 58             // timer sprites: top right of the window
+.const TIMER_X_TENS   = 288
+.const TIMER_X_ONES   = 312
+.const TIMER_MSB      = %00000110      // both timer sprites are beyond X = 255
+.const ROWS_PAL       = floor(TIME_LIMIT*50*SCROLL_SPEED/8) - LAND_LEAD
+.const ROWS_NTSC      = floor(TIME_LIMIT*60*SCROLL_SPEED/8) - LAND_LEAD
 .const PLAYER_Y       = 140            // sprite Y: vertically centred in the window
 .const PLAYER_X_START = 172            // sprite X: horizontally centred
 .const X_MIN          = 24             // leftmost sprite X that is fully on screen
@@ -82,6 +103,7 @@
 .const COL_LEDGE      = 9              // brown
 .const COL_DIVER      = 7              // yellow
 .const COL_TEXT       = 1              // white
+.const COL_TIMER      = 1              // white
 .const COL_WIN        = 5              // green
 .const COL_DEAD       = 2              // red
 
@@ -121,8 +143,20 @@ start:
     sta VIC_SPR_YEXP
     lda #COL_DIVER
     sta VIC_SPR0_COLOR
-    lda #1
+    lda #COL_TIMER
+    sta VIC_SPR1_COLOR
+    sta VIC_SPR2_COLOR
+    lda #TIMER_Y
+    sta VIC_SPR1_Y
+    sta VIC_SPR2_Y
+    lda #<TIMER_X_TENS
+    sta VIC_SPR1_X
+    lda #<TIMER_X_ONES
+    sta VIC_SPR2_X
+    lda #7                             // sprites 0-2: diver and the two timer digits
     sta VIC_SPR_ENABLE
+
+    jsr detect_system                  // PAL or NTSC: sets fps and is_pal
 
     // Title screen
     jsr init_game
@@ -163,6 +197,7 @@ game_loop:
 still_flying:
     jsr move_diver
     jsr animate_diver
+    jsr update_timer
     jsr scroll_shaft
     jmp game_loop
 
@@ -256,12 +291,34 @@ clear_colour:
     sta anim_timer
     lda #0
     sta anim_index
-    sta phase                          // 0 = ledges, 1 = run-out, 2 = ground
     sta ground_seen
-    lda #LEDGE_COUNT
-    sta ledges_left
     lda #START_GAP
     sta ledge_wait
+    lda #0                             // before the first ledge anything is reachable
+    sta prev_lo
+    lda #39
+    sta prev_hi
+
+    // rows to build before the ground, for a TIME_LIMIT second dive
+    lda is_pal
+    beq init_rows_ntsc
+    lda #<ROWS_PAL
+    sta rows_lo
+    lda #>ROWS_PAL
+    sta rows_hi
+    jmp init_rows_done
+init_rows_ntsc:
+    lda #<ROWS_NTSC
+    sta rows_lo
+    lda #>ROWS_NTSC
+    sta rows_hi
+init_rows_done:
+
+    lda #TIME_LIMIT                    // countdown
+    sta seconds
+    lda fps
+    sta fps_count
+    jsr show_time
 
     lda #<PLAYER_X_START
     sta player_x_lo
@@ -282,7 +339,8 @@ clear_colour:
 update_sprite_x:
     lda player_x_lo
     sta VIC_SPR0_X
-    lda player_x_hi                    // only sprite 0 is used, so bit 0 = X bit 8
+    lda player_x_hi                    // bit 0 = X bit 8 of the diver
+    ora #TIMER_MSB                     // plus the fixed bits for the timer digits
     sta VIC_SPR_XMSB
     rts
 
@@ -448,15 +506,27 @@ shift_chunk_3:
     jmp new_row
 
 // ----------------------------------------------------------------------------
-//  new_row: build the next bottom row. Phase 0 = random ledges, phase 1 = a
-//  clear run-out below the last ledge, phase 2 = solid ground.
+//  new_row: build the next bottom row. The level is a fixed number of rows
+//  (rows_lo/hi counts them down) so it lasts TIME_LIMIT seconds: random ledges,
+//  then END_GAP clear rows, then solid ground.
 // ----------------------------------------------------------------------------
 new_row:
-    lda phase
-    cmp #2
-    beq row_ground
-    cmp #1
-    beq row_runout
+    lda ground_seen
+    bne row_ground
+    lda rows_lo                        // 16-bit decrement of the rows left
+    bne nr_dec
+    dec rows_hi
+nr_dec:
+    dec rows_lo
+    lda rows_lo
+    ora rows_hi
+    beq row_ground                     // that was the last row: ground
+    lda rows_hi
+    bne nr_ledges
+    lda rows_lo
+    cmp #END_GAP
+    bcc row_blank                      // run-out above the ground
+nr_ledges:
     lda ledge_wait
     beq row_ledge
     dec ledge_wait
@@ -471,55 +541,54 @@ row_fill_loop:
     bpl row_fill_loop
     rts
 
-row_runout:
-    dec gap_left
-    bne row_blank
-    lda #2                             // next row is the ground
-    sta phase
-    jmp row_blank
-
 row_ground:
     lda #1
     sta ground_seen
     lda #CH_SOLID
     jmp row_fill
 
+// ----------------------------------------------------------------------------
+//  row_ledge: build a ledge row. Pick a candidate (single ledge from one wall,
+//  or ledges from both walls with a narrow gap); accept it only if its free
+//  space is within REACH columns of the previous ledge row's free space, so
+//  the diver can always get there in time. Otherwise try again, and after
+//  TRIES attempts leave the row empty.
+// ----------------------------------------------------------------------------
 row_ledge:
-    jsr get_random                         // how many blank rows before the next one
+    jsr get_random                     // blank rows before the next ledge row
     and #3
     clc
     adc #LEDGE_GAP_MIN
     sta ledge_wait
 
-    jsr get_random                         // length = MIN + 0..7 + 0..3
-    and #7
-    sta ledge_len
-    jsr get_random
-    and #3
-    clc
-    adc ledge_len
-    clc
-    adc #LEDGE_MIN_LEN
-    sta ledge_len
+    lda #TRIES
+    sta tries
+ledge_try:
+    jsr pick_ledge                     // carry clear = unusable candidate
+    bcc ledge_retry
+    jsr check_reach                    // carry clear = too far from last gap
+    bcs ledge_accept
+ledge_retry:
+    dec tries
+    bne ledge_try
+    jmp row_blank                      // nothing fair found: empty row
 
+ledge_accept:
     jsr row_blank                      // start from an empty row
-
-    jsr get_random                         // bit 7 picks the wall
-    bmi ledge_right
-
-    ldx ledge_len                      // left wall: columns 0 to len-1
+    ldx ledge_l                        // left wall: columns 0 to ledge_l-1
+    beq ledge_no_left
     dex
     lda #CH_SOLID
 ledge_left_loop:
     sta ROW_LAST,x
     dex
     bpl ledge_left_loop
-    jmp ledge_made
-
-ledge_right:
-    lda #40                            // right wall: columns 40-len to 39
+ledge_no_left:
+    lda ledge_r
+    beq ledge_made
+    lda #40                            // right wall: columns 40-ledge_r to 39
     sec
-    sbc ledge_len
+    sbc ledge_r
     tax
     lda #CH_SOLID
 ledge_right_loop:
@@ -529,13 +598,171 @@ ledge_right_loop:
     bne ledge_right_loop
 
 ledge_made:
-    dec ledges_left
-    bne ledge_done
-    lda #1                             // that was the last ledge
-    sta phase
-    lda #END_GAP
-    sta gap_left
-ledge_done:
+    lda free_lo                        // remember where the free space was
+    sta prev_lo
+    lda free_hi
+    sta prev_hi
+    rts
+
+// ----------------------------------------------------------------------------
+//  pick_ledge: choose a random candidate row. Sets ledge_l / ledge_r (ledge
+//  lengths in columns from the left / right wall) and free_lo / free_hi (the
+//  columns left open). Returns carry set if the candidate is usable.
+// ----------------------------------------------------------------------------
+pick_ledge:
+    jsr get_random
+    and #DOUBLE_MASK
+    beq pick_double
+
+    jsr get_random                     // single ledge: length = MIN + 0..7 + 0..3
+    and #7
+    sta ledge_len
+    jsr get_random
+    and #3
+    clc
+    adc ledge_len
+    clc
+    adc #LEDGE_MIN_LEN
+    sta ledge_len
+    jsr get_random                     // bit 7 picks the wall
+    bmi pick_right
+    lda ledge_len                      // left wall: free columns len..39
+    sta ledge_l
+    sta free_lo
+    lda #0
+    sta ledge_r
+    lda #39
+    sta free_hi
+    sec
+    rts
+pick_right:
+    lda #0                             // right wall: free columns 0..39-len
+    sta ledge_l
+    sta free_lo
+    lda #39
+    sec
+    sbc ledge_len
+    sta free_hi
+    lda ledge_len
+    sta ledge_r
+    sec
+    rts
+
+pick_double:
+    jsr get_random                     // gap width 6-9 columns
+    and #3
+    clc
+    adc #DOUBLE_GAP_MIN
+    sta gap_w
+    jsr get_random                     // gap starts at column 3-34
+    and #31
+    clc
+    adc #3
+    sta ledge_l                        // left ledge fills columns 0..start-1
+    sta free_lo
+    clc
+    adc gap_w                          // first column of the right ledge
+    cmp #38                            // keep at least 3 columns of right ledge
+    bcs pick_bad
+    sta ledge_r                        // (temporarily the start column)
+    sec
+    sbc #1
+    sta free_hi
+    lda #40
+    sec
+    sbc ledge_r
+    sta ledge_r
+    sec
+    rts
+pick_bad:
+    clc
+    rts
+
+// ----------------------------------------------------------------------------
+//  check_reach: carry set if free_lo..free_hi is within REACH columns of
+//  prev_lo..prev_hi (the free space of the previous ledge row)
+// ----------------------------------------------------------------------------
+check_reach:
+    lda prev_hi
+    clc
+    adc #REACH
+    cmp free_lo
+    bcc reach_fail                     // new free space starts too far right
+    lda free_hi
+    clc
+    adc #REACH
+    cmp prev_lo
+    bcc reach_fail                     // new free space ends too far left
+    sec
+    rts
+reach_fail:
+    clc
+    rts
+
+// ----------------------------------------------------------------------------
+//  detect_system: PAL (50 Hz) or NTSC (60 Hz)? PAL has raster lines above 263.
+//  Sets is_pal and fps.
+// ----------------------------------------------------------------------------
+detect_system:
+    ldx #0
+    ldy #12                            // poll for about 2-3 frames
+det_loop:
+    lda VIC_CTRL1
+    bpl det_next                       // raster bit 8 clear
+    lda VIC_RASTER
+    cmp #8
+    bcs det_pal                        // line 264 or more: PAL
+det_next:
+    inx
+    bne det_loop
+    dey
+    bne det_loop
+    lda #0
+    sta is_pal
+    lda #60
+    sta fps
+    rts
+det_pal:
+    lda #1
+    sta is_pal
+    lda #50
+    sta fps
+    rts
+
+// ----------------------------------------------------------------------------
+//  update_timer: once per frame. Counts fps frames per second and ticks the
+//  display down to 00.
+// ----------------------------------------------------------------------------
+update_timer:
+    dec fps_count
+    bne timer_done
+    lda fps
+    sta fps_count
+    lda seconds
+    beq timer_done
+    dec seconds
+    jmp show_time
+timer_done:
+    rts
+
+// show_time: point the two timer sprites at the digits of 'seconds'
+show_time:
+    lda seconds
+    ldx #0                             // X = tens
+show_tens:
+    cmp #10
+    bcc show_digits
+    sbc #10                            // carry is set here
+    inx
+    bne show_tens
+show_digits:
+    clc
+    adc #(digit_frames/64)
+    sta SPRITE_PTR2
+    txa
+    clc
+    adc #(digit_frames/64)
+    sta SPRITE_PTR1
     rts
 
 // ----------------------------------------------------------------------------
@@ -632,21 +859,32 @@ txt_retry:
 yscroll:        .byte 0                // current vertical fine scroll, 0-7
 anim_timer:     .byte 0
 anim_index:     .byte 0
-phase:          .byte 0
 ground_seen:    .byte 0                // 1 once the ground has started to appear
-ledges_left:    .byte 0
+rows_lo:        .byte 0                // rows still to build before the ground
+rows_hi:        .byte 0
 ledge_wait:     .byte 0                // blank rows still to go before the next ledge
-gap_left:       .byte 0
 ledge_len:      .byte 0
+ledge_l:        .byte 0                // candidate row: left / right ledge lengths
+ledge_r:        .byte 0
+free_lo:        .byte 0                // candidate row: open columns
+free_hi:        .byte 0
+prev_lo:        .byte 0                // last ledge row: open columns
+prev_hi:        .byte 0
+gap_w:          .byte 0
+tries:          .byte 0
+is_pal:         .byte 0
+fps:            .byte 50
+fps_count:      .byte 0
+seconds:        .byte 0
 player_x_lo:    .byte 0
 player_x_hi:    .byte 0
 
 // ----------------------------------------------------------------------------
 //  Diver sprite: three 24x21 frames, head pointing down the screen.
-//  Sprite data must be 64-byte aligned, and inside the VIC's view of RAM
-//  below $1000 (the VIC sees the character ROM at $1000-$1fff).
+//  Sprite data must be 64-byte aligned and outside $1000-$1fff, where the VIC
+//  sees the character ROM instead of RAM. $2000 up is fine.
 // ----------------------------------------------------------------------------
-.align 64
+* = $2000 "Sprites"
 sprite_frames:
 // frame 0
 .byte %00000110, %00000000, %01100000   // .....##..........##.....
@@ -718,4 +956,239 @@ sprite_frames:
 .byte %00000000, %00111100, %00000000   // ..........####..........
 .byte 0
 
-.errorif sprite_frames + 192 > $1000, "Sprite data must end below $1000"
+// ----------------------------------------------------------------------------
+//  Timer digits 0-9: 24x21 sprites, a 5x7 font drawn 4 pixels wide, 3 tall
+// ----------------------------------------------------------------------------
+digit_frames:
+// digit 0
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000011, %11111100   // ..####........########..
+.byte %00111100, %00000011, %11111100   // ..####........########..
+.byte %00111100, %00000011, %11111100   // ..####........########..
+.byte %00111100, %00111100, %00111100   // ..####....####....####..
+.byte %00111100, %00111100, %00111100   // ..####....####....####..
+.byte %00111100, %00111100, %00111100   // ..####....####....####..
+.byte %00111111, %11000000, %00111100   // ..########........####..
+.byte %00111111, %11000000, %00111100   // ..########........####..
+.byte %00111111, %11000000, %00111100   // ..########........####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte 0
+// digit 1
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000011, %11111100, %00000000   // ......########..........
+.byte %00000011, %11111100, %00000000   // ......########..........
+.byte %00000011, %11111100, %00000000   // ......########..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte 0
+// digit 2
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte 0
+// digit 3
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte 0
+// digit 4
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00111111, %11000000   // ..........########......
+.byte %00000000, %00111111, %11000000   // ..........########......
+.byte %00000000, %00111111, %11000000   // ..........########......
+.byte %00000011, %11000011, %11000000   // ......####....####......
+.byte %00000011, %11000011, %11000000   // ......####....####......
+.byte %00000011, %11000011, %11000000   // ......####....####......
+.byte %00111100, %00000011, %11000000   // ..####........####......
+.byte %00111100, %00000011, %11000000   // ..####........####......
+.byte %00111100, %00000011, %11000000   // ..####........####......
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte 0
+// digit 5
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111100, %00000000, %00000000   // ..####..................
+.byte %00111100, %00000000, %00000000   // ..####..................
+.byte %00111100, %00000000, %00000000   // ..####..................
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte 0
+// digit 6
+.byte %00000000, %00111111, %11000000   // ..........########......
+.byte %00000000, %00111111, %11000000   // ..........########......
+.byte %00000000, %00111111, %11000000   // ..........########......
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00111100, %00000000, %00000000   // ..####..................
+.byte %00111100, %00000000, %00000000   // ..####..................
+.byte %00111100, %00000000, %00000000   // ..####..................
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111111, %11111111, %11000000   // ..################......
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte 0
+// digit 7
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte 0
+// digit 8
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte 0
+// digit 9
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00111100, %00000000, %00111100   // ..####............####..
+.byte %00000011, %11111111, %11111100   // ......################..
+.byte %00000011, %11111111, %11111100   // ......################..
+.byte %00000011, %11111111, %11111100   // ......################..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000000, %00111100   // ..................####..
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000011, %11111100, %00000000   // ......########..........
+.byte %00000011, %11111100, %00000000   // ......########..........
+.byte %00000011, %11111100, %00000000   // ......########..........
+.byte 0
+
+.errorif digit_frames + 640 > $4000, "Sprite data must end below $4000"
