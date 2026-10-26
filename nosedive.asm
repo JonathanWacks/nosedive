@@ -1,10 +1,12 @@
 // ============================================================================
 //  NOSEDIVE  -  Commodore 64  -  Kick Assembler
-//  Version 0.4
+//  Version 0.5
 //
 //  You have jumped off the platform and are diving head first down a shaft.
 //  Steer left and right (joystick in port 2) to dodge the ledges that stick
 //  out of the left and right walls. Touch one and it's game over.
+//  You drop down a brick alleyway past ledges hanging in mid-air, and the
+//  odd bird that flaps across (touch one and you're dead).
 //  Reach the bottom and dive into the big wooden pail of water to win - there
 //  is a splash. Miss the pail, or clip its rim, and it's game over.
 //  (the countdown in the top right corner is the time left to the ground).
@@ -59,12 +61,16 @@
 .const VIC_SPR0_COLOR = $d027
 .const VIC_SPR1_COLOR = $d028
 .const VIC_SPR2_COLOR = $d029
-.const VIC_SPR3_X     = $d006          // balloons use sprites 3-7
+.const VIC_SPR3_X     = $d006          // balloons use sprites 3-6, the bird sprite 7
 .const VIC_SPR3_Y     = $d007
 .const VIC_SPR3_COLOR = $d02a
 .const SPRITE_PTR1    = $07f9
 .const SPRITE_PTR2    = $07fa
 .const SPRITE_PTR3    = $07fb
+.const SPRITE_PTR7    = $07ff
+.const VIC_SPR7_X     = $d00e
+.const VIC_SPR7_Y     = $d00f
+.const VIC_SPR7_COLOR = $d02e
 
 .const SID_V3_FREQ_LO = $d40e
 .const SID_V3_FREQ_HI = $d40f
@@ -87,17 +93,33 @@
 .const LAND_LEAD      = 10             // rows of lead so the ground arrives as the clock hits 0
 .const DOUBLE_MASK    = 3              // 1 ledge row in 4 has ledges on both walls
 .const DOUBLE_GAP_MIN = 6              // narrow gap is 6-9 columns wide
-.const REACH          = 3              // next gap may be at most 3 columns from the last
 .const TRIES          = 8              // attempts to find a fair ledge row
-.const LEDGE_MIN_LEN  = 11             // ledges are 11-21 columns long
+.const WALL_W        = 3              // brick walls: columns on each side
+.const PF_L           = WALL_W         // playfield columns (inside the walls)
+.const PF_R           = 39 - WALL_W
+.const PF_W           = 40 - 2*WALL_W
+.const LEDGE_MIN_LEN  = 8              // floating ledges are 8-16 columns long
+.const MIN_FREE       = 5              // a gap must be at least this many columns
 .const LEDGE_GAP_MIN  = 7              // blank rows between ledges: 7-10, so one
                                        // ledge every 8-11 rows
+.const REACH          = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / SCROLL_SPEED * MOVE_SPEED / 8) - 2
+                                       // columns the diver can surely cover between two ledge
+                                       // rows (a row passes him in 29 pixels of scroll), less 2
 .const START_GAP      = 6              // blank rows before the first ledge
 .const END_GAP        = 18             // blank rows between last ledge and ground
 .const ANIM_DELAY     = 6              // frames per diver animation step
 
 .const BALLOON_MIN_SEC = 3             // seconds between balloons: 3 to 6
 .const BALLOON_RANGE_SEC = 3           // (range x fps must be 128 or more)
+.const BIRD_MIN_SEC   = 10             // a bird every 10-17 seconds
+.const BIRD_RANGE_MASK = 7
+.const BIRD_SPEED     = 2              // pixels per frame across the screen
+.const BIRD_ANIM_DELAY = 5             // frames per wing beat step
+.const BIRD_Y_MIN     = 70             // bird flies at a random height from here ...
+.const BIRD_Y_MASK    = 127            // ... up to this much lower
+.const BIRD_HIT_Y_MIN = 128            // bird sprite Y range that overlaps the diver
+.const BIRD_HIT_Y_MAX = 153
+.const BIRD_HIT_DX    = 18             // and how many pixels sideways
 .const BALLOON_START_Y = 247           // just below the window: rises into view
 .const BALLOON_TOP    = 34             // gone once fully above the window
 .const BALLOON_ANIM_DELAY = 8          // frames per balloon animation step
@@ -120,8 +142,8 @@
 .const ROWS_NTSC      = floor(TIME_LIMIT*60*SCROLL_SPEED/8) - LAND_LEAD
 .const PLAYER_Y       = 140            // sprite Y: vertically centred in the window
 .const PLAYER_X_START = 172            // sprite X: horizontally centred
-.const X_MIN          = 24             // leftmost sprite X that is fully on screen
-.const X_MAX          = 319            // rightmost sprite X that is fully on screen
+.const X_MIN          = 24 + 8*WALL_W  // leftmost sprite X: against the left wall
+.const X_MAX          = 320 - 8*WALL_W // rightmost sprite X: against the right wall
 
 .const CH_SPACE       = $20
 .const CH_SOLID       = $a0            // ledge / floor: solid brown (redefined below)
@@ -132,6 +154,8 @@
 .const CH_SURF_B      = $c4
 .const CH_WATER       = $c5
 .const CH_HOOP        = $c6
+.const CH_LEDGE       = $c7            // floating ledge
+.const CH_BRICK       = $c8            // wall bricks
 .const ROW_LAST       = SCREEN + 24*40 // the row new ledges are built on
 
 .const COL_BORDER     = 14             // light blue
@@ -140,6 +164,9 @@
 .const COL_WOOD_LIGHT = 8              // orange: wood highlights (multicolour %01)
 .const COL_WATER      = 3              // cyan: the water (cell colour, multicolour %11)
 .const CELL_COLOUR    = 8 + COL_WATER  // colour RAM value: bit 3 = multicolour cell
+.const COL_BRICK      = 2              // red: brick walls (cell colour, multicolour %11)
+.const BRICK_CELL     = 8 + COL_BRICK
+.const COL_BIRD       = 15             // light grey
 .const COL_DIVER      = 7              // yellow
 .const COL_TEXT       = 1              // white
 .const COL_TIMER      = 1              // white
@@ -264,6 +291,10 @@ still_flying:
     jsr animate_diver
     jsr animate_water
     jsr update_timer
+    jsr update_bird                    // carry set = hit by the bird
+    bcc bird_ok
+    jmp crashed
+bird_ok:
     jsr update_balloons
     jsr scroll_shaft
     jsr hud_update
@@ -350,6 +381,52 @@ clear_colour:
     lda #COL_BACKGROUND
     sta VIC_BACKGROUND
 
+    // Brick walls on every row: brick characters in screen RAM, red cells in colour RAM
+    lda #<SCREEN
+    sta ptr_dst
+    lda #>SCREEN
+    sta ptr_dst+1
+    lda #<COLOR_RAM
+    sta ptr_col
+    lda #>COLOR_RAM
+    sta ptr_col+1
+    ldx #25
+iw_row:
+    ldy #0
+iw_left:
+    lda #CH_BRICK
+    sta (ptr_dst),y
+    lda #BRICK_CELL
+    sta (ptr_col),y
+    iny
+    cpy #WALL_W
+    bne iw_left
+    ldy #(40 - WALL_W)
+iw_right:
+    lda #CH_BRICK
+    sta (ptr_dst),y
+    lda #BRICK_CELL
+    sta (ptr_col),y
+    iny
+    cpy #40
+    bne iw_right
+    clc
+    lda ptr_dst
+    adc #40
+    sta ptr_dst
+    bcc iw_d
+    inc ptr_dst+1
+iw_d:
+    clc
+    lda ptr_col
+    adc #40
+    sta ptr_col
+    bcc iw_c
+    inc ptr_col+1
+iw_c:
+    dex
+    bne iw_row
+
     lda #7                             // fine scroll 7 (24-row mode, display on)
     sta yscroll
     ora #$10
@@ -363,16 +440,24 @@ clear_colour:
     sta splash
     sta pail_step
     sta wave_phase
+    sta row_ready
     sta VIC_SPR_PRIO                   // diver in front of the shaft again
     lda #WAVE_DELAY
     sta wave_timer
     jsr put_wave                       // water ripple back to its first shape
     lda #START_GAP
     sta ledge_wait
-    lda #0                             // before the first ledge anything is reachable
-    sta prev_lo
-    lda #39
-    sta prev_hi
+    lda #1                             // before the first ledge anything is reachable
+    sta pi_n
+    lda #PF_L
+    sta pi_a
+    lda #(PF_R - 2)                    // (diver positions are left-hand columns)
+    sta pi_b
+    lda #0
+    sta bird_active
+    sta bird_en
+    sta bird_msb
+    jsr set_bird_wait
 
     // rows to build before the ground, for a TIME_LIMIT second dive
     lda is_pal
@@ -607,11 +692,31 @@ shift_chunk_3:
     jmp new_row
 
 // ----------------------------------------------------------------------------
-//  new_row: build the next bottom row. The level is a fixed number of rows
+//  new_row: put the prepared row on the bottom screen row. (The row itself was
+//  built in an earlier, quieter frame by prepare_row - see hud_update. If that
+//  hasn't happened it is built here, which is slower but still right.)
+// ----------------------------------------------------------------------------
+new_row:
+    lda row_ready
+    bne nr_copy
+    jsr prepare_row
+nr_copy:
+    ldx #39
+nr_loop:
+    lda row_buf,x
+    sta ROW_LAST,x
+    dex
+    bpl nr_loop
+    lda #0
+    sta row_ready
+    rts
+
+// ----------------------------------------------------------------------------
+//  prepare_row: build the next bottom row in row_buf. The level is a fixed number of rows
 //  (rows_lo/hi counts them down) so it lasts TIME_LIMIT seconds: random ledges,
 //  then END_GAP clear rows, then the pail, then a solid floor.
 // ----------------------------------------------------------------------------
-new_row:
+prepare_row:
     lda ground_seen
     bne row_pail
     lda rows_lo                        // 16-bit decrement of the rows left
@@ -636,10 +741,20 @@ nr_wait:
 
 row_blank:
     lda #CH_SPACE
+    jsr row_fill
+    lda #CH_BRICK                      // the walls
+    ldx #(WALL_W - 1)
+rb_walls:
+    sta row_buf,x
+    sta row_buf + 40 - WALL_W,x
+    dex
+    bpl rb_walls
+    rts
+
 row_fill:
     ldx #39
 row_fill_loop:
-    sta ROW_LAST,x
+    sta row_buf,x
     dex
     bpl row_fill_loop
     rts
@@ -685,7 +800,7 @@ rp_odd:
     ldy pk
     lda char_odd,y
 rp_put:
-    sta ROW_LAST,x
+    sta row_buf,x
     inx
     cpx pb
     bne rp_fill
@@ -694,10 +809,10 @@ rp_put:
     bcs rp_done
     lda #CH_RIM                        // rim caps at both ends of the water
     ldx pa
-    sta ROW_LAST,x
+    sta row_buf,x
     ldx pb
     dex
-    sta ROW_LAST,x
+    sta row_buf,x
 rp_done:
     rts
 
@@ -728,11 +843,11 @@ io_no:
     rts
 
 // ----------------------------------------------------------------------------
-//  row_ledge: build a ledge row. Pick a candidate (single ledge from one wall,
-//  or ledges from both walls with a narrow gap); accept it only if its free
-//  space is within REACH columns of the previous ledge row's free space, so
-//  the diver can always get there in time. Otherwise try again, and after
-//  TRIES attempts leave the row empty.
+//  row_ledge: build a ledge row. Pick a candidate: a single ledge hanging free
+//  in mid-air, or (one row in four) ledges from both walls with a narrow gap
+//  between them. Accept it only if its widest open space is within REACH
+//  columns of the previous ledge row's, so the diver can always get there in
+//  time. Otherwise try again, and after TRIES attempts leave the row empty.
 // ----------------------------------------------------------------------------
 row_ledge:
     jsr get_random                     // blank rows before the next ledge row
@@ -754,77 +869,114 @@ ledge_retry:
     jmp row_blank                      // nothing fair found: empty row
 
 ledge_accept:
-    jsr row_blank                      // start from an empty row
-    ldx ledge_l                        // left wall: columns 0 to ledge_l-1
-    beq ledge_no_left
-    dex
-    lda #CH_SOLID
-ledge_left_loop:
-    sta ROW_LAST,x
-    dex
-    bpl ledge_left_loop
-ledge_no_left:
-    lda ledge_r
+    jsr row_blank                      // walls only
+    ldx seg1_s
+    ldy seg1_n
+    beq ledge_seg2
+    jsr draw_seg
+ledge_seg2:
+    ldx seg2_s
+    ldy seg2_n
     beq ledge_made
-    lda #40                            // right wall: columns 40-ledge_r to 39
-    sec
-    sbc ledge_r
-    tax
-    lda #CH_SOLID
-ledge_right_loop:
-    sta ROW_LAST,x
-    inx
-    cpx #40
-    bne ledge_right_loop
-
+    jsr draw_seg
 ledge_made:
-    lda free_lo                        // remember where the free space was
-    sta prev_lo
-    lda free_hi
-    sta prev_hi
+    ldx #1                             // remember where the free space was
+lm_copy:
+    lda ci_a,x
+    sta pi_a,x
+    lda ci_b,x
+    sta pi_b,x
+    dex
+    bpl lm_copy
+    lda ci_n
+    sta pi_n
+    rts
+
+// draw_seg: ledge characters in X..X+Y-1 of the new row
+draw_seg:
+    lda #CH_LEDGE
+draw_seg_loop:
+    sta row_buf,x
+    inx
+    dey
+    bne draw_seg_loop
     rts
 
 // ----------------------------------------------------------------------------
-//  pick_ledge: choose a random candidate row. Sets ledge_l / ledge_r (ledge
-//  lengths in columns from the left / right wall) and free_lo / free_hi (the
-//  columns left open). Returns carry set if the candidate is usable.
+//  pick_ledge: choose a random candidate row. Sets seg1_s/seg1_n and
+//  seg2_s/seg2_n (start column and length of up to two ledges) and the usable
+//  open spaces ci_a/ci_b (range of left-hand columns the diver can take, 1-2
+//  of them). Returns carry set if the candidate is OK.
 // ----------------------------------------------------------------------------
 pick_ledge:
     jsr get_random
     and #DOUBLE_MASK
-    beq pick_double
-
-    jsr get_random                     // single ledge: length = MIN + 0..7 + 0..3
+    bne ps_single
+    jmp pick_double
+ps_single:
+    jsr get_random                     // single ledge: length = MIN + 0..7 + 0..1
     and #7
-    sta ledge_len
+    sta seg1_n
     jsr get_random
-    and #3
+    and #1
     clc
-    adc ledge_len
+    adc seg1_n
     clc
     adc #LEDGE_MIN_LEN
-    sta ledge_len
-    jsr get_random                     // bit 7 picks the wall
-    bmi pick_right
-    lda ledge_len                      // left wall: free columns len..39
-    sta ledge_l
-    sta free_lo
+    sta seg1_n
+    lda #(PF_W + 1)                    // possible start positions
+    sec
+    sbc seg1_n
+    sta tmpv
+    jsr get_random
+    and #31
+    cmp tmpv
+    bcc ps_start
+    sbc tmpv                           // fold into range
+ps_start:
+    clc
+    adc #PF_L
+    sta seg1_s
     lda #0
-    sta ledge_r
-    lda #39
-    sta free_hi
+    sta seg2_n
+    lda seg1_s                         // open space to the left of the ledge
     sec
-    rts
-pick_right:
-    lda #0                             // right wall: free columns 0..39-len
-    sta ledge_l
-    sta free_lo
-    lda #39
+    sbc #PF_L
+    sta w1
+    lda #(PF_R + 1)                    // and to the right
     sec
-    sbc ledge_len
-    sta free_hi
-    lda ledge_len
-    sta ledge_r
+    sbc seg1_s
+    sec
+    sbc seg1_n
+    sta w2
+    lda #0                             // list the open spaces wide enough to use
+    sta ci_n
+    lda w1
+    cmp #MIN_FREE
+    bcc ps_noleft
+    ldx ci_n
+    lda #PF_L
+    sta ci_a,x
+    lda seg1_s
+    sec
+    sbc #3                             // last column the diver's left edge can take
+    sta ci_b,x
+    inc ci_n
+ps_noleft:
+    lda w2
+    cmp #MIN_FREE
+    bcc ps_noright
+    ldx ci_n
+    lda seg1_s
+    clc
+    adc seg1_n
+    sta ci_a,x
+    lda #(PF_R - 2)
+    sta ci_b,x
+    inc ci_n
+ps_noright:
+    lda ci_n
+    beq pick_bad
     sec
     rts
 
@@ -834,24 +986,36 @@ pick_double:
     clc
     adc #DOUBLE_GAP_MIN
     sta gap_w
-    jsr get_random                     // gap starts at column 3-34
+    jsr get_random                     // gap starts at column PF_L+3 ...
     and #31
     clc
-    adc #3
-    sta ledge_l                        // left ledge fills columns 0..start-1
+    adc #(PF_L + 3)
     sta free_lo
     clc
     adc gap_w                          // first column of the right ledge
-    cmp #38                            // keep at least 3 columns of right ledge
+    sta tmpv
+    cmp #(PF_R - 1)                    // keep at least 3 columns of right ledge
     bcs pick_bad
-    sta ledge_r                        // (temporarily the start column)
+    lda #PF_L
+    sta seg1_s
+    lda free_lo
     sec
-    sbc #1
-    sta free_hi
-    lda #40
+    sbc #PF_L
+    sta seg1_n                         // left ledge: PF_L to the gap
+    lda tmpv
+    sta seg2_s
+    lda #(PF_R + 1)
     sec
-    sbc ledge_r
-    sta ledge_r
+    sbc tmpv
+    sta seg2_n                         // right ledge: from the gap to PF_R
+    lda #1
+    sta ci_n
+    lda free_lo
+    sta ci_a                           // diver positions in the gap
+    lda tmpv
+    sec
+    sbc #3
+    sta ci_b
     sec
     rts
 pick_bad:
@@ -859,24 +1023,75 @@ pick_bad:
     rts
 
 // ----------------------------------------------------------------------------
-//  check_reach: carry set if free_lo..free_hi is within REACH columns of
-//  prev_lo..prev_hi (the free space of the previous ledge row)
+//  check_reach: carry set if, wherever the diver is in the previous ledge
+//  row's open spaces (pi_a/pi_b), some open space of the candidate (ci_a/ci_b)
+//  is within REACH columns. The diver sees only a row or two ahead, so this
+//  must hold from every open space he could have picked, at its two ends and
+//  its middle.
 // ----------------------------------------------------------------------------
 check_reach:
-    lda prev_hi
+    ldx #0
+cr_prev:
+    cpx pi_n
+    bcs cr_ok
+    lda pi_a,x
+    jsr near_any
+    bcc cr_fail
+    lda pi_b,x
+    jsr near_any
+    bcc cr_fail
+    lda pi_a,x
     clc
-    adc #REACH
-    cmp free_lo
-    bcc reach_fail                     // new free space starts too far right
-    lda free_hi
-    clc
-    adc #REACH
-    cmp prev_lo
-    bcc reach_fail                     // new free space ends too far left
+    adc pi_b,x
+    lsr
+    jsr near_any
+    bcc cr_fail
+    inx
+    bne cr_prev
+cr_ok:
     sec
     rts
-reach_fail:
+cr_fail:
     clc
+    rts
+
+// near_any: A = diver column; carry set if a candidate open space is within REACH
+near_any:
+    sta chk_p
+    ldy #0
+na_loop:
+    cpy ci_n
+    bcs na_no
+    lda ci_a,y
+    sta ja
+    lda ci_b,y
+    sta jb
+    lda chk_p
+    jsr dist_pj
+    cmp #(REACH + 1)
+    bcc na_yes
+    iny
+    bne na_loop
+na_yes:
+    sec
+    rts
+na_no:
+    clc
+    rts
+
+// dist_pj: A = column p; distance (in columns) to the range ja..jb
+dist_pj:
+    sta dpp
+    lda ja
+    sec
+    sbc dpp
+    bcs dpj_ret                        // p at or left of the range
+    lda dpp
+    sec
+    sbc jb
+    bcs dpj_ret                        // p right of the range
+    lda #0                             // inside it
+dpj_ret:
     rts
 
 // ----------------------------------------------------------------------------
@@ -921,6 +1136,13 @@ update_timer:
     lda #$10                           // +10 points each second
     ldx #0
     jsr add_score
+    lda bird_active                    // count seconds to the next bird
+    bne ut_bird_done
+    dec bird_wait
+    bne ut_bird_done
+    jsr spawn_bird
+    jsr set_bird_wait
+ut_bird_done:
     lda seconds
     beq timer_done
     dec seconds
@@ -929,8 +1151,9 @@ update_timer:
 timer_done:
     rts
 
-// hud_update: redraw one changed HUD sprite. Drawing is skipped on frames where
-// the screen was shifted, because those already use most of the frame.
+// hud_update: the quiet-frame jobs, one per frame, never on a frame that shifted
+// the screen (those already use most of the frame): build the next shaft row,
+// else redraw one changed HUD sprite.
 hud_update:
     lda shifted
     beq hu_go
@@ -938,6 +1161,12 @@ hud_update:
     sta shifted
     rts
 hu_go:
+    lda row_ready                      // first, get the next shaft row ready
+    bne hu_hud
+    lda #1
+    sta row_ready
+    jmp prepare_row
+hu_hud:
     lda score_dirty
     beq hu_time
     lda #0
@@ -1144,10 +1373,11 @@ ub_ptr:
     adc #(balloon_frames/64)
     sta balloon_ptr
     lda #7
+    ora bird_en                        // sprite 7 is the bird
     sta emask
-    lda #0
+    lda bird_msb
     sta msbmask
-    ldx #4
+    ldx #3                             // balloon slots 0-3 = sprites 3-6
 ub_loop:
     lda b_y,x
     bne !+
@@ -1271,7 +1501,7 @@ ssi_ok:
 
 // spawn_balloon: new balloon in a free slot, at a random column
 spawn_balloon:
-    ldx #4
+    ldx #3
 sb_find:
     lda b_y,x
     beq sb_found
@@ -1279,11 +1509,11 @@ sb_find:
     bpl sb_find
     rts                                // all slots busy: skip this one
 sb_found:
-    jsr get_random                     // column 0-36
-    and #63
-    cmp #37
+    jsr get_random                     // column 0-30 within the walls
+    and #31
+    cmp #31
     bcc sb_col
-    sbc #37
+    sbc #31
 sb_col:
     sta tmpv
     lda #0
@@ -1304,9 +1534,9 @@ sb_col:
     bcc sb_jit
     inc b_xh,x
 sb_jit:
-    lda b_xl,x                         // plus the left edge of the window
+    lda b_xl,x                         // plus the left wall
     clc
-    adc #24
+    adc #X_MIN
     sta b_xl,x
     bcc sb_edge
     inc b_xh,x
@@ -1331,6 +1561,160 @@ balloon_speeds:
 
 
 // ----------------------------------------------------------------------------
+//  The bird (sprite 7). Every 10-17 seconds one flaps across the screen at a
+//  random height, bobbing up and down with each wing beat. It is in front of
+//  everything. Touching it is fatal. Runs before update_balloons, which
+//  folds bird_en / bird_msb into the sprite enable and X bit 8 registers.
+// ----------------------------------------------------------------------------
+set_bird_wait:
+    jsr get_random
+    and #BIRD_RANGE_MASK
+    clc
+    adc #BIRD_MIN_SEC
+    sta bird_wait
+    rts
+
+spawn_bird:
+    lda #1
+    sta bird_active
+    jsr get_random
+    and #1
+    sta bird_dir                       // 0 = flies right, 1 = flies left
+    bne sbd_left
+    lda #0                             // start hidden behind the left border
+    sta bird_xl
+    sta bird_xh
+    beq sbd_y
+sbd_left:
+    lda #<344                          // start hidden behind the right border
+    sta bird_xl
+    lda #>344
+    sta bird_xh
+sbd_y:
+    jsr get_random
+    and #BIRD_Y_MASK
+    clc
+    adc #BIRD_Y_MIN
+    sta bird_y
+    lda #0
+    sta bird_anim
+    lda #BIRD_ANIM_DELAY
+    sta bird_timer
+    lda #COL_BIRD
+    sta VIC_SPR7_COLOR
+    rts
+
+// update_bird: returns carry set if the bird hit the diver
+update_bird:
+    lda bird_active
+    bne bird_fly
+    clc
+    rts
+bird_fly:
+    lda bird_dir
+    bne bird_left
+    clc                                // flying right
+    lda bird_xl
+    adc #BIRD_SPEED
+    sta bird_xl
+    lda bird_xh
+    adc #0
+    sta bird_xh
+    beq bird_flap
+    lda bird_xl
+    cmp #<344
+    bcc bird_flap
+    jmp bird_gone                      // behind the right border
+bird_left:
+    sec                                // flying left
+    lda bird_xl
+    sbc #BIRD_SPEED
+    sta bird_xl
+    lda bird_xh
+    sbc #0
+    sta bird_xh
+    bmi bird_left_gone
+    ora bird_xl
+    bne bird_flap
+bird_left_gone:
+    jmp bird_gone                      // behind the left border
+bird_flap:
+    dec bird_timer
+    bne bird_show
+    lda #BIRD_ANIM_DELAY
+    sta bird_timer
+    lda bird_anim
+    clc
+    adc #1
+    and #3
+    sta bird_anim
+bird_show:
+    ldx bird_anim
+    lda anim_sequence,x                // wings up, level, down, level
+    ldy bird_dir
+    beq bird_ptr
+    clc
+    adc #3                             // second set of frames faces left
+bird_ptr:
+    clc
+    adc #(bird_frames/64)
+    sta SPRITE_PTR7
+    lda bird_y                         // bob with the wing beat
+    clc
+    adc bird_bob,x
+    sta bird_ysc
+    sta VIC_SPR7_Y
+    lda bird_xl
+    sta VIC_SPR7_X
+    lda #%10000000
+    sta bird_en
+    lda #0
+    sta bird_msb
+    lda bird_xh
+    beq bird_hit_test
+    lda #%10000000
+    sta bird_msb
+bird_hit_test:
+    lda bird_ysc                       // level with the diver?
+    cmp #BIRD_HIT_Y_MIN
+    bcc bird_miss
+    cmp #(BIRD_HIT_Y_MAX + 1)
+    bcs bird_miss
+    sec                                // bird X minus diver X (9 bit)
+    lda bird_xl
+    sbc player_x_lo
+    sta tmpv
+    lda bird_xh
+    sbc player_x_hi
+    beq bird_right_of
+    cmp #$ff
+    bne bird_miss
+    lda tmpv                           // bird to the left
+    cmp #(256 - BIRD_HIT_DX)
+    bcs bird_hit
+    bcc bird_miss
+bird_right_of:
+    lda tmpv
+    cmp #(BIRD_HIT_DX + 1)
+    bcs bird_miss
+bird_hit:
+    sec
+    rts
+bird_miss:
+    clc
+    rts
+bird_gone:
+    lda #0
+    sta bird_active
+    sta bird_en
+    sta bird_msb
+    clc
+    rts
+
+bird_bob:
+    .byte 3, 0, -3, 0                  // body dips with wings up, rises on the downstroke
+
+// ----------------------------------------------------------------------------
 //  The splash. start_splash: the diver has touched the water. Score the
 //  landing, put the diver behind the water (so the pail swallows him as the
 //  shaft keeps scrolling for SINK_FRAMES), and throw up five droplets, using
@@ -1338,6 +1722,10 @@ balloon_speeds:
 //  speed (signed, negative = up), b_vx = horizontal speed (signed).
 // ----------------------------------------------------------------------------
 start_splash:
+    lda #0                             // the bird flies off: its sprite becomes a droplet
+    sta bird_active
+    sta bird_en
+    sta bird_msb
     lda #SPLASH_FRAMES
     sta splash
     lda #1
@@ -1548,7 +1936,7 @@ sc_solid:
     sta CHARSET + CH_SOLID*8,x
     dex
     bpl sc_solid
-    ldx #(7*8 - 1)
+    ldx #(9*8 - 1)
 sc_custom:
     lda custom_glyphs,x
     sta CHARSET + CH_WOOD_A*8,x
@@ -1564,6 +1952,8 @@ custom_glyphs:
     .byte $00, $30, $cc, $ff, $ff, $ff, $ff, $ff     // water surface B
     .byte $ff, $ff, $ff, $ff, $ff, $ff, $ff, $ff     // water
     .byte $aa, $55, $55, $55, $55, $55, $55, $aa     // iron hoop (orange band)
+    .byte $55, $aa, $aa, $aa, $aa, $aa, $aa, $55     // floating ledge (light edges)
+    .byte $55, $fd, $fd, $fd, $55, $df, $df, $df     // brick wall: red bricks, orange mortar
 
 // ----------------------------------------------------------------------------
 //  get_random: A = random byte (SID voice 3 noise)
@@ -1679,13 +2069,23 @@ ground_seen:    .byte 0                // 1 once the ground has started to appea
 rows_lo:        .byte 0                // rows still to build before the ground
 rows_hi:        .byte 0
 ledge_wait:     .byte 0                // blank rows still to go before the next ledge
-ledge_len:      .byte 0
-ledge_l:        .byte 0                // candidate row: left / right ledge lengths
-ledge_r:        .byte 0
-free_lo:        .byte 0                // candidate row: open columns
-free_hi:        .byte 0
-prev_lo:        .byte 0                // last ledge row: open columns
-prev_hi:        .byte 0
+seg1_s:         .byte 0                // candidate row: ledge 1 start column and length
+seg1_n:         .byte 0
+seg2_s:         .byte 0                // ledge 2 (0 length = none)
+seg2_n:         .byte 0
+w1:             .byte 0
+w2:             .byte 0
+free_lo:        .byte 0                // (double rows: gap start)
+pi_n:           .byte 0                // last ledge row: number of open spaces ...
+pi_a:           .fill 2, 0             // ... and the range of left-hand columns in each
+pi_b:           .fill 2, 0
+ci_n:           .byte 0                // candidate row: the same
+ci_a:           .fill 2, 0
+ci_b:           .fill 2, 0
+ja:             .byte 0
+jb:             .byte 0
+dpp:            .byte 0
+chk_p:          .byte 0
 gap_w:          .byte 0
 tries:          .byte 0
 is_pal:         .byte 0
@@ -1696,6 +2096,8 @@ score_lo:       .byte 0                // BCD: tens, units
 score_dirty:    .byte 0                // HUD sprites needing a redraw
 time_dirty:     .byte 0
 shifted:        .byte 0                // 1 if this frame shifted the screen
+row_ready:      .byte 0                // 1 when row_buf holds the next shaft row
+row_buf:        .fill 40, 0
 splash:         .byte 0                // frames of splash left (0 = not landed yet)
 pail_step:      .byte 0                // which pail row is next
 pk:             .byte 0
@@ -1703,6 +2105,17 @@ pa:             .byte 0
 pb:             .byte 0
 wave_timer:     .byte 0
 wave_phase:     .byte 0
+bird_active:    .byte 0
+bird_wait:      .byte 0                // seconds until the next bird
+bird_dir:       .byte 0
+bird_xl:        .byte 0
+bird_xh:        .byte 0
+bird_y:         .byte 0
+bird_ysc:       .byte 0                // Y on screen: bird_y plus the wing-beat bob
+bird_anim:      .byte 0
+bird_timer:     .byte 0
+bird_en:        .byte 0                // sprite 7 enable bit while a bird is out
+bird_msb:       .byte 0                // and its X bit 8
 water_y:        .byte 0                // screen Y of the water surface during the splash
 score_hi:       .byte 0                // BCD: thousands, hundreds
 dig0:           .byte 0                // glyph numbers for render_digits
@@ -1906,4 +2319,145 @@ drop_frame:
     .byte %00000000, %00111100, %00000000   // ..........####..........
     .fill 22, 0
 
-.errorif drop_frame + 64 > CHARSET, "Sprite data must end before the character set at $2800"
+// Bird: wings up, level, down - first facing right, then facing left
+bird_frames:
+// bird right, wings up
+.byte %00001000, %00000000, %00000000   // ....#...................
+.byte %00000100, %00000000, %00000000   // .....#..................
+.byte %00000110, %00000000, %00000000   // .....##.................
+.byte %00000011, %00000000, %00000000   // ......##................
+.byte %00000011, %10000000, %00000000   // ......###...............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000001, %11100000, %01111000   // .......####......####...
+.byte %00000001, %11110000, %11101100   // .......#####....###.##..
+.byte %00000001, %11111111, %11111110   // .......################.
+.byte %00000111, %11111111, %11111110   // .....##################.
+.byte %00011111, %11111111, %11111100   // ...###################..
+.byte %01111111, %11111111, %11100000   // .##################.....
+.byte %00011111, %11111111, %11000000   // ...###############......
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte 0
+// bird right, wings level
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %01111000   // .................####...
+.byte %00011100, %00000000, %11101100   // ...###..........###.##..
+.byte %00000011, %11111111, %11111110   // ......#################.
+.byte %00000111, %11111111, %11111110   // .....##################.
+.byte %00011111, %11111111, %11111100   // ...###################..
+.byte %01111111, %11111111, %11100000   // .##################.....
+.byte %00011111, %11111111, %11000000   // ...###############......
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte 0
+// bird right, wings down
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %01111000   // .................####...
+.byte %00000000, %00000000, %11101100   // ................###.##..
+.byte %00000001, %11111111, %11111110   // .......################.
+.byte %00000111, %11111111, %11111110   // .....##################.
+.byte %00011111, %11111111, %11111100   // ...###################..
+.byte %01111111, %11111111, %11100000   // .##################.....
+.byte %00011111, %11111111, %11000000   // ...###############......
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000001, %11100000, %00000000   // .......####.............
+.byte %00000011, %11000000, %00000000   // ......####..............
+.byte %00000011, %10000000, %00000000   // ......###...............
+.byte %00000111, %00000000, %00000000   // .....###................
+.byte %00000100, %00000000, %00000000   // .....#..................
+.byte %00001000, %00000000, %00000000   // ....#...................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte 0
+// bird left, wings up
+.byte %00000000, %00000000, %00010000   // ...................#....
+.byte %00000000, %00000000, %00100000   // ..................#.....
+.byte %00000000, %00000000, %01100000   // .................##.....
+.byte %00000000, %00000000, %11000000   // ................##......
+.byte %00000000, %00000001, %11000000   // ...............###......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00011110, %00000111, %10000000   // ...####......####.......
+.byte %00110111, %00001111, %10000000   // ..##.###....#####.......
+.byte %01111111, %11111111, %10000000   // .################.......
+.byte %01111111, %11111111, %11100000   // .##################.....
+.byte %00111111, %11111111, %11111000   // ..###################...
+.byte %00000111, %11111111, %11111110   // .....##################.
+.byte %00000011, %11111111, %11111000   // ......###############...
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte 0
+// bird left, wings level
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00011110, %00000000, %00000000   // ...####.................
+.byte %00110111, %00000000, %00111000   // ..##.###..........###...
+.byte %01111111, %11111111, %11000000   // .#################......
+.byte %01111111, %11111111, %11100000   // .##################.....
+.byte %00111111, %11111111, %11111000   // ..###################...
+.byte %00000111, %11111111, %11111110   // .....##################.
+.byte %00000011, %11111111, %11111000   // ......###############...
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte 0
+// bird left, wings down
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00011110, %00000000, %00000000   // ...####.................
+.byte %00110111, %00000000, %00000000   // ..##.###................
+.byte %01111111, %11111111, %10000000   // .################.......
+.byte %01111111, %11111111, %11100000   // .##################.....
+.byte %00111111, %11111111, %11111000   // ..###################...
+.byte %00000111, %11111111, %11111110   // .....##################.
+.byte %00000011, %11111111, %11111000   // ......###############...
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000000, %00000111, %10000000   // .............####.......
+.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000000, %00000001, %11000000   // ...............###......
+.byte %00000000, %00000000, %11100000   // ................###.....
+.byte %00000000, %00000000, %00100000   // ..................#.....
+.byte %00000000, %00000000, %00010000   // ...................#....
+.byte %00000000, %00000000, %00000000   // ........................
+.byte 0
+
+.errorif bird_frames + 384 > CHARSET, "Sprite data must end before the character set at $2800"

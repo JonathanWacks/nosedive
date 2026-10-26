@@ -2,14 +2,16 @@
 
 A head-first diving game for the Commodore 64, written in [Kick Assembler](http://theweb.dk/KickAssembler/).
 
-You've jumped off the platform and you're diving head first down a shaft. Ledges stick out of the
-left and right walls at random. Steer left and right to dodge them, touch one and it's game over.
+You've jumped off the platform and you're diving head first down a shaft. You're falling down an
+alleyway with brick walls, and ledges hang in mid-air across it. Steer left and right to dodge them
+(and the occasional bird); touch either and it's game over.
 Reach the bottom and dive into a big wooden pail of water to win. Miss the pail or clip its rim and it's game over. A countdown in the bottom right corner shows how many
 seconds are left until the water, and it starts at 60.
 
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
-random column. Fly into one to pop it.
+random column. Fly into one to pop it. A **bird** flaps across the shaft every 10-17 seconds;
+flying into it is fatal.
 
 ## Build and run
 
@@ -31,15 +33,25 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   the text screen is moved up one row and a new row is built at the bottom. The copy runs just
   ahead of the raster beam so there is no tearing, and colour RAM never needs scrolling because
   every character uses the same colour.
-- **Ledges.** Each new bottom row is either blank or a ledge row, one every 8-11 rows. Most ledge
-  rows are a single ledge of 11-21 columns on a random wall. About one in four has ledges on
-  **both** walls, leaving a gap of 6-9 columns to steer through. The generator only accepts a row
-  whose open space is within 3 columns of the previous ledge row's open space, so a narrow gap is
-  never out of reach. Random numbers come from SID voice 3 noise.
+- **Brick walls.** The outer `WALL_W` (3) columns on each side are a red brick character, set once
+  in colour RAM; every new row is built with bricks at both ends.
+- **Ledges.** Each new bottom row is either blank or a ledge row, one every 7-10 rows. Ledges are
+  free-floating blocks of 8-16 columns. Most rows have a single ledge; about one in four has two,
+  one anchored to each wall, leaving a gap of 6-9 columns to steer through. The diver only sees
+  about 10 rows ahead, so the generator checks reachability: from every usable open space in the
+  previous ledge row (both ends and the middle), some open space in the new row must be within
+  `REACH` columns, which is derived from the scroll speed, the row spacing and the steering speed.
+  Random numbers come from SID voice 3 noise.
+- **Quiet-frame row building.** The next row is built into `row_buf` on a frame that isn't busy
+  scrolling and copied in on the shift frame, keeping every frame inside the NTSC cycle budget.
 - **The HUD** is two hardware sprites (1 = score, 2 = time), drawn double size from a 5x7 font. The
   program redraws their pixels only when a number changes, one sprite per frame and never on a
   frame that is busy scrolling, so they stay still while the shaft scrolls.
-- **Balloons** use sprites 3-7 (five slots). Each has three frames: the balloon sways one way while
+- **The bird** is sprite 7. It enters from a random side at a random height, moves `BIRD_SPEED`
+  pixels per frame, flaps through three frames and bobs up and down with the flap. Hits are tested
+  in code (bounding box), and it is cleared when it leaves the screen. Only one bird at a time; the
+  wait to the next one counts down while none is on screen.
+- **Balloons** use sprites 3-6 (four slots). Each has three frames: the balloon sways one way while
   its string wiggles the other. Touching is tested in code against the diver's position. Score is
   kept in decimal (BCD) and stops at 9999.
 - **The timer** works like this: The program detects PAL or NTSC at startup, counts 50 or 60 frames per
@@ -75,8 +87,15 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
 | `DOUBLE_MASK` | 3 | 1 ledge row in (mask+1) has ledges on both walls |
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
-| `REACH` | 3 | how far, in columns, a gap may be from the previous one |
-| `LEDGE_MIN_LEN` | 11 | shortest ledge in columns (longest is this + 10) |
+| `REACH` | derived (11 at speed 1) | how far, in columns, the diver can move between ledge rows; computed from `LEDGE_GAP_MIN`, `SCROLL_SPEED` and `MOVE_SPEED` |
+| `WALL_W` | 3 | width of the brick walls in columns |
+| `LEDGE_MIN_LEN` | 8 | shortest floating ledge in columns (longest is 16) |
+| `MIN_FREE` | 5 | narrowest open space that counts as passable |
+| `BIRD_MIN_SEC` / `BIRD_RANGE_MASK` | 10 / 7 | a bird every 10 to 17 seconds |
+| `BIRD_SPEED` | 2 | pixels per frame the bird flies |
+| `BIRD_ANIM_DELAY` | 5 | frames per flap step |
+| `BIRD_Y_MIN` / `BIRD_Y_MASK` | 70 / 127 | bird height is 70 plus a random 0-127 |
+| `BIRD_HIT_*` | | bounding box used for the bird hit test |
 | `LEDGE_GAP_MIN` | 7 | minimum blank rows between ledges (plus 0-3 random) |
 | `ANIM_DELAY` | 6 | frames per diver animation step |
 | `BALLOON_MIN_SEC` / `BALLOON_RANGE_SEC` | 3 / 3 | balloons appear every 3 to 6 seconds |
@@ -84,9 +103,8 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `BALLOON_POINTS_HI` | 2 | balloon score in hundreds (200) |
 | `LAND_BONUS_HI` | $10 | landing bonus in BCD hundreds (1000) |
 
-The ledge lengths and spacing are tuned so a player who looks ahead can always dodge, but the
-tightest case (two long ledges on opposite walls, 8 rows apart) leaves little spare time. If you
-raise `SCROLL_SPEED` or lengthen ledges, the spacing may need to grow with it.
+`REACH` follows the scroll speed automatically, so raising `SCROLL_SPEED` makes the generator more
+conservative rather than unfair; at higher speeds you may want a larger `LEDGE_GAP_MIN`.
 
 ## Memory map
 
@@ -94,6 +112,6 @@ raise `SCROLL_SPEED` or lengthen ledges, the spacing may need to grow with it.
 |---|---|
 | `$0400` | screen RAM (the game scrolls this) |
 | `$0801` | BASIC loader, then the program |
-| `$2000` | sprite data: diver frames, balloon frames, score and time sprites, splash droplet (outside `$1000-$1fff`, where the VIC sees ROM) |
-| `$2800` | character set: ROM copy plus the ledge and pail characters, built at startup |
+| `$2000` | sprite data: diver frames, balloon frames, score and time sprites, splash droplet, bird frames (outside `$1000-$1fff`, where the VIC sees ROM) |
+| `$2800` | character set: ROM copy plus the ledge, brick and pail characters, built at startup |
 | `$d800` | colour RAM, set once |
