@@ -91,6 +91,7 @@
 .const MOVE_SPEED     = 3              // pixels per frame the diver steers sideways
 .const TIME_LIMIT     = 60             // seconds from jump to ground
 .const LAND_LEAD      = 10             // rows of lead so the ground arrives as the clock hits 0
+.const FLOAT_MASK     = 3              // a single ledge floats free when (random & mask) is 0 (3 = one in four), else it is mounted on a wall
 .const DOUBLE_MASK    = 3              // 1 ledge row in 4 has ledges on both walls
 .const DOUBLE_GAP_MIN = 6              // narrow gap is 6-9 columns wide
 .const TRIES          = 8              // attempts to find a fair ledge row
@@ -145,9 +146,10 @@
 .const HIT_DX         = 20             // and how many pixels sideways
 .const HUD_Y          = 228            // HUD sprites sit on the bottom rows
 .const SCORE_X        = 28
-.const TIME_X         = 318
+.const TIME_X         = 306                // three digits fit before the right border
 .const HUD_MSB        = %00000100      // time sprite (sprite 2) is beyond X = 255
 .const ROWS_PAL       = floor(TIME_LIMIT*50*SCROLL_SPEED/8) - LAND_LEAD
+.const DISPLAY_OFFSET  = 11             // rows from the bottom of the screen to the diver's level: the counter hits 0 as the water arrives
 .const ROWS_NTSC      = floor(TIME_LIMIT*60*SCROLL_SPEED/8) - LAND_LEAD
 .const PLAYER_Y       = 140            // sprite Y: vertically centred in the window
 .const PLAYER_X_START = 172            // sprite X: horizontally centred
@@ -583,6 +585,7 @@ iw_c:
     sta anv_col
     lda #0
     sta after_ledge
+    sta wall_side
     lda #SCROLL_SPEED                  // anvils change this during a run
     sta speed
     jsr set_reach
@@ -613,8 +616,13 @@ init_rows_ntsc:
     sta rows_hi
 init_rows_done:
 
-    lda #TIME_LIMIT                    // countdown
-    sta seconds
+    clc                                // rows-to-go counter shown on the HUD
+    lda rows_lo
+    adc #<DISPLAY_OFFSET
+    sta rl_lo
+    lda rows_hi
+    adc #>DISPLAY_OFFSET
+    sta rl_hi
     lda fps
     sta fps_count
 
@@ -848,6 +856,17 @@ nr_loop:
     bpl nr_loop
     lda #0
     sta row_ready
+    lda rl_lo                          // one row nearer the water
+    ora rl_hi
+    beq nr_rows_done
+    lda rl_lo
+    bne nr_rl
+    dec rl_hi
+nr_rl:
+    dec rl_lo
+    lda #1
+    sta time_dirty
+nr_rows_done:
     lda anv_col                        // age the anvil; it has scrolled off after 26 rows
     cmp #$ff
     beq nr_done
@@ -1117,6 +1136,10 @@ lm_copy:
     bpl lm_copy
     lda ci_n
     sta pi_n
+    lda cand_side                      // remember which wall a wall ledge was on
+    bmi lm_done
+    sta wall_side
+lm_done:
     rts
 
 // draw_seg: ledge characters in X..X+Y-1 of the new row
@@ -1136,6 +1159,8 @@ draw_seg_loop:
 //  of them). Returns carry set if the candidate is OK.
 // ----------------------------------------------------------------------------
 pick_ledge:
+    lda #$ff
+    sta cand_side                      // (set below if this is a wall ledge)
     jsr get_random
     and #DOUBLE_MASK
     bne ps_single
@@ -1164,6 +1189,34 @@ ps_start:
     clc
     adc #PF_L
     sta seg1_s
+    jsr get_random                     // some ledges stick out of a wall instead
+    and #FLOAT_MASK
+    beq ps_free
+    jsr get_random                     // a wall ledge is short, so the diver can always
+    and #3                             // cross to the other side before the next one ...
+    clc
+    adc #LEDGE_MIN_LEN
+    sta seg1_n
+    lda wall_side                      // ... and usually on the opposite wall to the last one
+    sta cand_side
+    jsr get_random
+    and #3
+    beq ps_same
+    lda cand_side
+    eor #1
+    sta cand_side
+ps_same:
+    lda cand_side
+    bne ps_right_wall
+    lda #PF_L                          // flush with the left wall
+    sta seg1_s
+    jmp ps_free
+ps_right_wall:
+    lda #(PF_R + 1)                    // flush with the right wall
+    sec
+    sbc seg1_n
+    sta seg1_s
+ps_free:
     lda #0
     sta seg2_n
     lda seg1_s                         // open space to the left of the ledge
@@ -1370,11 +1423,6 @@ update_timer:
     jsr spawn_bird
     jsr set_bird_wait
 ut_bird_done:
-    lda seconds
-    beq timer_done
-    dec seconds
-    lda #1
-    sta time_dirty
 timer_done:
     rts
 
@@ -1410,7 +1458,26 @@ hu_done:
 
 // render_time: draw 'seconds' into the time sprite
 render_time:
-    lda seconds
+    lda rl_lo
+    sta rt_lo
+    lda rl_hi
+    sta rt_hi
+    ldx #0                             // X = hundreds
+rt_hund:
+    lda rt_lo
+    sec
+    sbc #100
+    tay
+    lda rt_hi
+    sbc #0
+    bcc rt_hund_done
+    sta rt_hi
+    sty rt_lo
+    inx
+    bne rt_hund
+rt_hund_done:
+    stx dig0
+    lda rt_lo
     ldx #0                             // X = tens
 show_tens:
     cmp #10
@@ -1419,11 +1486,19 @@ show_tens:
     inx
     bne show_tens
 show_ones:
-    sta dig1
-    stx dig0
-    lda #10                            // 10 = blank glyph
     sta dig2
+    stx dig1
+    lda #10                            // 10 = blank glyph
     sta dig3
+    lda dig0                           // no leading zeros
+    bne rt_lead_done
+    lda #10
+    sta dig0
+    lda dig1
+    bne rt_lead_done
+    lda #10
+    sta dig1
+rt_lead_done:
     lda #<time_sprite
     sta ptr_dst
     lda #>time_sprite
@@ -2302,6 +2377,8 @@ speed:          .byte SCROLL_SPEED     // pixels per frame the shaft scrolls now
 reach_p1:       .byte REACH1 + 1       // REACH + 1 for the current speed
 anv_col:        .byte $ff              // column of the anvil on screen ($ff = none)
 anv_age:        .byte 0                // shifts since it arrived
+wall_side:      .byte 0                // side of the last wall ledge: 0 = left, 1 = right
+cand_side:      .byte 0                // same for the candidate row ($ff = not a wall ledge)
 after_ledge:    .byte 0                // 1 = the previous row was a ledge row
 ta_row:         .byte 0
 ta_last:        .byte 0
@@ -2338,7 +2415,10 @@ tries:          .byte 0
 is_pal:         .byte 0
 fps:            .byte 50
 fps_count:      .byte 0
-seconds:        .byte 0
+rl_lo:          .byte 0                // rows left until the water, shown on the HUD
+rl_hi:          .byte 0
+rt_lo:          .byte 0
+rt_hi:          .byte 0
 score_lo:       .byte 0                // BCD: tens, units
 score_dirty:    .byte 0                // HUD sprites needing a redraw
 time_dirty:     .byte 0

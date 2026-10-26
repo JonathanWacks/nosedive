@@ -3,10 +3,10 @@
 A head-first diving game for the Commodore 64, written in [Kick Assembler](http://theweb.dk/KickAssembler/).
 
 You've jumped off the platform and you're diving head first down a shaft. You're falling down an
-alleyway with brick walls, and ledges hang in mid-air across it. Steer left and right to dodge them
+alleyway with brick walls, and ledges stick out of the walls or hang in mid-air across it. Steer left and right to dodge them
 (and the occasional bird); touch either and it's game over.
-Reach the bottom and dive into a big wooden pail of water to win. Miss the pail or clip its rim and it's game over. A countdown in the bottom right corner shows how many
-seconds are left until the water, and it starts at 60.
+Reach the bottom and dive into a big wooden pail of water to win. Miss the pail or clip its rim and it's game over. A counter in the bottom right corner shows how many
+rows are left until the water (about 376 at the start). It counts rows, not seconds, so anvils make it fall faster.
 
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
@@ -35,9 +35,11 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   every character uses the same colour.
 - **Brick walls.** The outer `WALL_W` (3) columns on each side are a red brick character, set once
   in colour RAM; every new row is built with bricks at both ends.
-- **Ledges.** Each new bottom row is either blank or a ledge row, one every 7-10 rows. Ledges are
-  free-floating blocks of 8-16 columns. Most rows have a single ledge; about one in four has two,
-  one anchored to each wall, leaving a gap of 6-9 columns to steer through. The diver only sees
+- **Ledges.** Each new bottom row is either blank or a ledge row, one every 7-10 rows. Three kinds:
+  **wall ledges** (3 in 4 of the single ledges): 8-11 columns, flush with a wall, usually on the
+  opposite wall to the previous wall ledge so the free side keeps changing; **floating ledges**
+  of 8-16 columns; and (one row in four proposed) a **double**, one ledge from each wall leaving
+  a gap of 6-9 columns to steer through. The diver only sees
   about 10 rows ahead, so the generator checks reachability: from every usable open space in the
   previous ledge row (both ends and the middle), some open space in the new row must be within
   `REACH` columns, which is derived from the scroll speed, the row spacing and the steering speed.
@@ -54,8 +56,9 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
 - **Balloons** use sprites 3-6 (four slots). Each has three frames: the balloon sways one way while
   its string wiggles the other. Touching is tested in code against the diver's position. Score is
   kept in decimal (BCD) and stops at 9999.
-- **The timer** works like this: The program detects PAL or NTSC at startup, counts 50 or 60 frames per
-  second, and sizes the level (a fixed number of rows) so the water arrives as the clock reaches 0.
+- **The row counter** is decremented every time the screen shifts up a row, and is sized
+  (`DISPLAY_OFFSET`) so it reaches 0 as the water arrives. A frame counter still ticks seconds for
+  the +10 score, balloons and birds.
 - **The diver** is hardware sprite 0, held in the middle of the screen, with three animation
   frames played as 0, 1, 2, 1. It moves sideways only.
 - **Collision** uses the VIC sprite-to-background collision register, so it matches exactly
@@ -71,7 +74,7 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   reused) fly up in arcs and fall back into the rising water, then the landed screen appears.
   The landing bonus is scored at the moment of impact.
 
-A run takes `TIME_LIMIT` seconds (60 by default) on both PAL and NTSC machines.
+A run at the starting speed takes `TIME_LIMIT` seconds (60 by default); anvils shorten it.
 
 ## Tuning
 
@@ -83,7 +86,9 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `ANVIL_MASK` | 63 | 1 in (mask+1) gap rows holds an anvil (one on screen at a time) |
 | `COL_WOOD_LIGHT` | 12 | the shared %01 colour (mid grey): anvil tops, ledge edges, pail hoop, brick mortar |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
-| `TIME_LIMIT` | 60 | seconds from jump to ground; the level length follows from it |
+| `TIME_LIMIT` | 60 | seconds from jump to ground at the starting speed; the level length (in rows) follows from it |
+| `DISPLAY_OFFSET` | 11 | added to the level's row count to give the HUD counter's start value (it reaches 0 at the water) |
+| `FLOAT_MASK` | 3 | a single ledge floats free when (random AND mask) is 0 (one in four); otherwise it is wall-mounted |
 | `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |
 | `SPLASH_FRAMES` / `SINK_FRAMES` | 100 / 30 | length of the splash scene / frames the shaft keeps scrolling while the diver sinks |
 | `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
@@ -91,7 +96,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
 | `REACH1`-`REACH3` | derived (11, 4, 2) | how far, in columns, the diver can move between ledge rows at each speed; computed from `LEDGE_GAP_MIN` and `MOVE_SPEED`, and the generator switches to the current speed's value when an anvil is taken |
 | `WALL_W` | 3 | width of the brick walls in columns |
-| `LEDGE_MIN_LEN` | 8 | shortest floating ledge in columns (longest is 16) |
+| `LEDGE_MIN_LEN` | 8 | shortest ledge in columns (floating: up to 16; wall-mounted: up to 11, within `REACH`) |
 | `MIN_FREE` | 5 | narrowest open space that counts as passable |
 | `BIRD_MIN_SEC` / `BIRD_RANGE_MASK` | 10 / 7 | a bird every 10 to 17 seconds |
 | `BIRD_SPEED` | 2 | pixels per frame the bird flies |
