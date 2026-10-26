@@ -35,14 +35,14 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   every character uses the same colour.
 - **Brick walls.** The outer `WALL_W` (3) columns on each side are a red brick character, set once
   in colour RAM; every new row is built with bricks at both ends.
-- **Ledges.** Each new bottom row is either blank or a ledge row, one every 7-10 rows. Three kinds:
-  **wall ledges** (3 in 4 of the single ledges): 8-11 columns, flush with a wall, usually on the
+- **Ledges.** Each new bottom row is either blank or a ledge row, one every 9-12 rows at the starting speed (further apart after an anvil, so the diver always has the same time to react). Three kinds:
+  **wall ledges** (3 in 4 of the single ledges): 10-13 columns, flush with a wall, usually on the
   opposite wall to the previous wall ledge so the free side keeps changing; **floating ledges**
-  of 8-16 columns; and (one row in four proposed) a **double**, one ledge from each wall leaving
+  of 10-18 columns; and (one row in four proposed) a **double**, one ledge from each wall leaving
   a gap of 6-9 columns to steer through. The diver only sees
   about 10 rows ahead, so the generator checks reachability: from every usable open space in the
   previous ledge row (both ends and the middle), some open space in the new row must be within
-  `REACH` columns, which is derived from the scroll speed, the row spacing and the steering speed.
+  `REACH` columns (14), which is derived from the row spacing and the steering speed.
   Random numbers come from SID voice 3 noise.
 - **Quiet-frame row building.** The next row is built into `row_buf` on a frame that isn't busy
   scrolling and copied in on the shift frame, keeping every frame inside the NTSC cycle budget.
@@ -94,9 +94,9 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
 | `DOUBLE_MASK` | 3 | 1 ledge row in (mask+1) has ledges on both walls |
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
-| `REACH1`-`REACH3` | derived (11, 4, 2) | how far, in columns, the diver can move between ledge rows at each speed; computed from `LEDGE_GAP_MIN` and `MOVE_SPEED`, and the generator switches to the current speed's value when an anvil is taken |
+| `REACH1` | derived (14) | how far, in columns, the diver can move between ledge rows at the starting speed; computed from `LEDGE_GAP_MIN` and `MOVE_SPEED`. `GAP_S2` / `GAP_S3` (14 / 19) are the blank rows needed between ledges at speeds 2 and 3 to keep the same reach |
 | `WALL_W` | 3 | width of the brick walls in columns |
-| `LEDGE_MIN_LEN` | 8 | shortest ledge in columns (floating: up to 16; wall-mounted: up to 11, within `REACH`) |
+| `LEDGE_MIN_LEN` | 10 | shortest ledge in columns (floating: up to 18; wall-mounted: up to 13, within `REACH`) |
 | `MIN_FREE` | 5 | narrowest open space that counts as passable |
 | `BIRD_MIN_SEC` / `BIRD_RANGE_MASK` | 10 / 7 | a bird every 10 to 17 seconds |
 | `BIRD_SPEED` | 2 | pixels per frame the bird flies |
@@ -104,15 +104,14 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `BIRD_Y_MIN` / `BIRD_Y_MASK` | 165 / 63 | bird starts below the diver at 165 plus a random 0-63 |
 | `BIRD_RISE` | 1 | pixels per frame the bird climbs; it vanishes above `BIRD_Y_TOP` (50) |
 | `BIRD_HIT_*` | | bounding box used for the bird hit test |
-| `LEDGE_GAP_MIN` | 7 | minimum blank rows between ledges (plus 0-3 random) |
+| `LEDGE_GAP_MIN` | 8 | minimum blank rows between ledges at speed 1 (plus 0-3 random) |
 | `ANIM_DELAY` | 6 | frames per diver animation step |
 | `BALLOON_MIN_SEC` / `BALLOON_RANGE_SEC` | 3 / 3 | balloons appear every 3 to 6 seconds |
 | `balloon_speeds` | 3, 2, 3, 4 | table by balloon colour (red, purple, green, light red): pixels per frame it rises |
 | `BALLOON_POINTS_HI` | 2 | balloon score in hundreds (200) |
 | `LAND_BONUS_HI` | $10 | landing bonus in BCD hundreds (1000) |
 
-`REACH` follows the scroll speed automatically, so raising `SCROLL_SPEED` makes the generator more
-conservative rather than unfair; at higher speeds you may want a larger `LEDGE_GAP_MIN`.
+The gap between ledges is looked up by the current scroll speed (`gap_tab`), so `REACH` stays the same however fast the fall. If you change `SCROLL_SPEED` or `SPEED_MAX`, extend that table.
 
 ## Memory map
 

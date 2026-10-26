@@ -99,15 +99,15 @@
 .const PF_L           = WALL_W         // playfield columns (inside the walls)
 .const PF_R           = 39 - WALL_W
 .const PF_W           = 40 - 2*WALL_W
-.const LEDGE_MIN_LEN  = 8              // floating ledges are 8-16 columns long
+.const LEDGE_MIN_LEN  = 10             // floating ledges are 10-18 columns long, wall ledges 10-13
 .const MIN_FREE       = 5              // a gap must be at least this many columns
-.const LEDGE_GAP_MIN  = 7              // blank rows between ledges: 7-10, so one
-                                       // ledge every 8-11 rows
+.const LEDGE_GAP_MIN  = 8              // blank rows between ledges at the starting speed: 8-11
 .const SPEED_MAX       = 3              // anvils speed the fall up to this many pixels per frame
-// how far (columns) the diver can get between ledge rows, at each speed
+// how far (columns) the diver can get between ledge rows at the starting speed. Faster
+// falls get proportionally more blank rows between ledges, so this stays the same.
 .const REACH1         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 1 * MOVE_SPEED / 8) - 2
-.const REACH2         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 2 * MOVE_SPEED / 8) - 2
-.const REACH3         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 3 * MOVE_SPEED / 8) - 2
+.const GAP_S2         = floor(((REACH1 + 2) * 8 * 2 / MOVE_SPEED + 29 + 8) / 8) - 1
+.const GAP_S3         = floor(((REACH1 + 2) * 8 * 3 / MOVE_SPEED + 29 + 8) / 8) - 1
 .const ANVIL_CELL     = 8 + 0          // black cell colour for the anvil's column (multicolour %11)
 .const ANVIL_MARGIN   = 30             // no anvils this close to the pail (its water is %11 too)
 .const ANVIL_MASK     = 63             // 1 in 64 gap rows holds an anvil pick-up
@@ -402,7 +402,7 @@ ta_none:
     clc
     rts
 
-// speed_up: one pixel per frame faster (up to SPEED_MAX); ledges get fairer to match
+// speed_up: one pixel per frame faster (up to SPEED_MAX); ledges get further apart to match
 speed_up:
     lda speed
     cmp #SPEED_MAX
@@ -410,13 +410,13 @@ speed_up:
     inc speed
 set_reach:
     ldx speed
-    lda reach_tab,x
-    sta reach_p1
+    lda gap_tab,x
+    sta gap_min
 su_done:
     rts
 
-reach_tab:
-    .byte 0, REACH1 + 1, REACH2 + 1, REACH3 + 1
+gap_tab:
+    .byte 0, LEDGE_GAP_MIN, GAP_S2, GAP_S3
 
 // x_to_col: A = pixels to subtract from the diver's X; returns the text column in A
 x_to_col:
@@ -1099,7 +1099,7 @@ row_ledge:
     jsr get_random                     // blank rows before the next ledge row
     and #3
     clc
-    adc #LEDGE_GAP_MIN
+    adc gap_min
     sta ledge_wait
 
     lda #TRIES
@@ -2374,7 +2374,8 @@ txt_retry:
 //  Variables
 // ----------------------------------------------------------------------------
 speed:          .byte SCROLL_SPEED     // pixels per frame the shaft scrolls now
-reach_p1:       .byte REACH1 + 1       // REACH + 1 for the current speed
+reach_p1:       .byte REACH1 + 1       // REACH + 1
+gap_min:        .byte LEDGE_GAP_MIN    // blank rows between ledges at the current speed
 anv_col:        .byte $ff              // column of the anvil on screen ($ff = none)
 anv_age:        .byte 0                // shifts since it arrived
 wall_side:      .byte 0                // side of the last wall ledge: 0 = left, 1 = right
