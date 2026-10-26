@@ -1,6 +1,6 @@
 // ============================================================================
 //  NOSEDIVE  -  Commodore 64  -  Kick Assembler
-//  Version 0.2
+//  Version 0.3
 //
 //  You have jumped off the platform and are diving head first down a shaft.
 //  Steer left and right (joystick in port 2) to dodge the ledges that stick
@@ -8,6 +8,10 @@
 //  Reach the ground at the bottom and you win - before the clock runs out
 //  (the countdown in the top right corner is the time left to the ground).
 //  Some rows have ledges on BOTH walls, leaving a narrow gap to steer through.
+//  Score: +10 every second, +1000 for landing, +200 for each balloon you
+//  touch. Balloons drift up the screen in front of the ledges.
+//  The HUD (score bottom left, time bottom right) is drawn with sprites so
+//  it stays put while the shaft scrolls.
 //
 //  How the scrolling works
 //  -----------------------
@@ -50,8 +54,12 @@
 .const VIC_SPR0_COLOR = $d027
 .const VIC_SPR1_COLOR = $d028
 .const VIC_SPR2_COLOR = $d029
+.const VIC_SPR3_X     = $d006          // balloons use sprites 3-7
+.const VIC_SPR3_Y     = $d007
+.const VIC_SPR3_COLOR = $d02a
 .const SPRITE_PTR1    = $07f9
 .const SPRITE_PTR2    = $07fa
+.const SPRITE_PTR3    = $07fb
 
 .const SID_V3_FREQ_LO = $d40e
 .const SID_V3_FREQ_HI = $d40f
@@ -83,10 +91,21 @@
 .const END_GAP        = 18             // blank rows between last ledge and ground
 .const ANIM_DELAY     = 6              // frames per diver animation step
 
-.const TIMER_Y        = 58             // timer sprites: top right of the window
-.const TIMER_X_TENS   = 288
-.const TIMER_X_ONES   = 312
-.const TIMER_MSB      = %00000110      // both timer sprites are beyond X = 255
+.const BALLOON_SPEED  = 3              // pixels per frame balloons rise
+.const BALLOON_MIN_SEC = 3             // seconds between balloons: 3 to 6
+.const BALLOON_RANGE_SEC = 3           // (range x fps must be 128 or more)
+.const BALLOON_START_Y = 247           // just below the window: rises into view
+.const BALLOON_TOP    = 34             // gone once fully above the window
+.const BALLOON_ANIM_DELAY = 8          // frames per balloon animation step
+.const BALLOON_POINTS_HI = 2           // 200 points (BCD hundreds)
+.const LAND_BONUS_HI  = $10            // 1000 points (BCD thousands)
+.const HIT_Y_MIN      = 127            // balloon sprite Y range that overlaps the diver
+.const HIT_Y_MAX      = 160
+.const HIT_DX         = 20             // and how many pixels sideways
+.const HUD_Y          = 228            // HUD sprites sit on the bottom rows
+.const SCORE_X        = 28
+.const TIME_X         = 318
+.const HUD_MSB        = %00000100      // time sprite (sprite 2) is beyond X = 255
 .const ROWS_PAL       = floor(TIME_LIMIT*50*SCROLL_SPEED/8) - LAND_LEAD
 .const ROWS_NTSC      = floor(TIME_LIMIT*60*SCROLL_SPEED/8) - LAND_LEAD
 .const PLAYER_Y       = 140            // sprite Y: vertically centred in the window
@@ -104,6 +123,7 @@
 .const COL_DIVER      = 7              // yellow
 .const COL_TEXT       = 1              // white
 .const COL_TIMER      = 1              // white
+.const COL_SCORE      = 3              // cyan
 .const COL_WIN        = 5              // green
 .const COL_DEAD       = 2              // red
 
@@ -143,17 +163,26 @@ start:
     sta VIC_SPR_YEXP
     lda #COL_DIVER
     sta VIC_SPR0_COLOR
-    lda #COL_TIMER
+    // Sprites 1 and 2 are the HUD (score, time), drawn double size
+    lda #COL_SCORE
     sta VIC_SPR1_COLOR
+    lda #COL_TIMER
     sta VIC_SPR2_COLOR
-    lda #TIMER_Y
+    lda #HUD_Y
     sta VIC_SPR1_Y
     sta VIC_SPR2_Y
-    lda #<TIMER_X_TENS
+    lda #SCORE_X
     sta VIC_SPR1_X
-    lda #<TIMER_X_ONES
+    lda #<TIME_X
     sta VIC_SPR2_X
-    lda #7                             // sprites 0-2: diver and the two timer digits
+    lda #%00000110
+    sta VIC_SPR_XEXP
+    sta VIC_SPR_YEXP
+    lda #(score_sprite/64)
+    sta SPRITE_PTR1
+    lda #(time_sprite/64)
+    sta SPRITE_PTR2
+    lda #7                             // sprites 0-2: diver, score, time
     sta VIC_SPR_ENABLE
 
     jsr detect_system                  // PAL or NTSC: sets fps and is_pal
@@ -198,13 +227,19 @@ still_flying:
     jsr move_diver
     jsr animate_diver
     jsr update_timer
+    jsr update_balloons
     jsr scroll_shaft
+    jsr hud_update
     jmp game_loop
 
 // ----------------------------------------------------------------------------
 //  End of game
 // ----------------------------------------------------------------------------
 landed:
+    lda #0                             // landing bonus
+    ldx #LAND_BONUS_HI
+    jsr add_score
+    jsr render_score                   // show it right away
     lda #COL_WIN
     sta VIC_BORDER
     lda #<txt_landed
@@ -318,7 +353,29 @@ init_rows_done:
     sta seconds
     lda fps
     sta fps_count
-    jsr show_time
+
+    lda #0                             // score, balloons
+    sta score_lo
+    sta score_hi
+    sta msbmask
+    ldx #4
+init_balloons:
+    sta b_y,x
+    dex
+    bpl init_balloons
+    lda #7
+    sta VIC_SPR_ENABLE                 // diver and HUD only
+    lda #BALLOON_ANIM_DELAY
+    sta banim_timer
+    lda #0
+    sta banim_index
+    jsr set_spawn_interval
+    lda #0
+    sta score_dirty
+    sta time_dirty
+    sta shifted
+    jsr render_score
+    jsr render_time
 
     lda #<PLAYER_X_START
     sta player_x_lo
@@ -340,7 +397,8 @@ update_sprite_x:
     lda player_x_lo
     sta VIC_SPR0_X
     lda player_x_hi                    // bit 0 = X bit 8 of the diver
-    ora #TIMER_MSB                     // plus the fixed bits for the timer digits
+    ora #HUD_MSB                       // plus the fixed bit for the time sprite
+    ora msbmask                        // and the balloons' bit 8s
     sta VIC_SPR_XMSB
     rts
 
@@ -439,6 +497,8 @@ scroll_fine:
 //  just ahead of the raster beam, so there is no tearing.
 // ----------------------------------------------------------------------------
 shift_rows:
+    lda #1
+    sta shifted
     ldx #0
 shift_chunk_0:
     lda SCREEN+40+0,x
@@ -730,40 +790,417 @@ det_pal:
     rts
 
 // ----------------------------------------------------------------------------
-//  update_timer: once per frame. Counts fps frames per second and ticks the
-//  display down to 00.
+//  update_timer: once per frame. Counts fps frames per second; each second
+//  ticks the display down to 00 and scores 10 points.
 // ----------------------------------------------------------------------------
 update_timer:
     dec fps_count
     bne timer_done
     lda fps
     sta fps_count
+    lda #$10                           // +10 points each second
+    ldx #0
+    jsr add_score
     lda seconds
     beq timer_done
     dec seconds
-    jmp show_time
+    lda #1
+    sta time_dirty
 timer_done:
     rts
 
-// show_time: point the two timer sprites at the digits of 'seconds'
-show_time:
+// hud_update: redraw one changed HUD sprite. Drawing is skipped on frames where
+// the screen was shifted, because those already use most of the frame.
+hud_update:
+    lda shifted
+    beq hu_go
+    lda #0
+    sta shifted
+    rts
+hu_go:
+    lda score_dirty
+    beq hu_time
+    lda #0
+    sta score_dirty
+    jmp render_score
+hu_time:
+    lda time_dirty
+    beq hu_done
+    lda #0
+    sta time_dirty
+    jmp render_time
+hu_done:
+    rts
+
+// render_time: draw 'seconds' into the time sprite
+render_time:
     lda seconds
     ldx #0                             // X = tens
 show_tens:
     cmp #10
-    bcc show_digits
+    bcc show_ones
     sbc #10                            // carry is set here
     inx
     bne show_tens
-show_digits:
+show_ones:
+    sta dig1
+    stx dig0
+    lda #10                            // 10 = blank glyph
+    sta dig2
+    sta dig3
+    lda #<time_sprite
+    sta ptr_dst
+    lda #>time_sprite
+    sta ptr_dst+1
+    jmp render_digits
+
+// ----------------------------------------------------------------------------
+//  Score. Kept as 4 BCD digits: score_hi = thousands/hundreds, score_lo =
+//  tens/units. add_score: A = BCD to add to score_lo, X = BCD to add to
+//  score_hi. Stops at 9999 and redraws the HUD.
+// ----------------------------------------------------------------------------
+add_score:
+    sed
     clc
-    adc #(digit_frames/64)
-    sta SPRITE_PTR2
+    adc score_lo
+    sta score_lo
     txa
-    clc
-    adc #(digit_frames/64)
-    sta SPRITE_PTR1
+    adc score_hi
+    sta score_hi
+    cld
+    bcc add_score_done
+    lda #$99
+    sta score_lo
+    sta score_hi
+add_score_done:
+    lda #1
+    sta score_dirty                    // HUD redraws soon
     rts
+
+render_score:
+    lda score_hi
+    lsr
+    lsr
+    lsr
+    lsr
+    sta dig0
+    lda score_hi
+    and #15
+    sta dig1
+    lda score_lo
+    lsr
+    lsr
+    lsr
+    lsr
+    sta dig2
+    lda score_lo
+    and #15
+    sta dig3
+    lda #<score_sprite
+    sta ptr_dst
+    lda #>score_sprite
+    sta ptr_dst+1
+
+// ----------------------------------------------------------------------------
+//  render_digits: draw four 5x7 glyphs (numbers dig0-dig3, 10 = blank) into
+//  the sprite at ptr_dst, 6 pixels apart. Only the top 7 sprite rows are
+//  written; the sprite is shown double size.
+// ----------------------------------------------------------------------------
+render_digits:
+    lda dig0
+    asl
+    asl
+    asl
+    sta fnt0
+    lda dig1
+    asl
+    asl
+    asl
+    sta fnt1
+    lda dig2
+    asl
+    asl
+    asl
+    sta fnt2
+    lda dig3
+    asl
+    asl
+    asl
+    sta fnt3
+    ldy #0                             // byte offset into the sprite
+    ldx #0                             // glyph row 0-6
+rd_row:
+    stx rowi
+    lda fnt0
+    clc
+    adc rowi
+    tax
+    lda font_rows,x
+    sta gly0
+    lda fnt1
+    clc
+    adc rowi
+    tax
+    lda font_rows,x
+    sta gly1
+    lda fnt2
+    clc
+    adc rowi
+    tax
+    lda font_rows,x
+    sta gly2
+    lda fnt3
+    clc
+    adc rowi
+    tax
+    lda font_rows,x
+    sta gly3
+    // sprite byte 0 = glyph 0 at x 0-4, glyph 1 top two bits at x 6-7
+    lda gly0
+    asl
+    asl
+    asl
+    sta tmpv
+    lda gly1
+    lsr
+    lsr
+    lsr
+    ora tmpv
+    sta (ptr_dst),y
+    iny
+    // byte 1 = rest of glyph 1 (x 8-10), glyph 2 top four bits (x 12-15)
+    lda gly1
+    and #7
+    asl
+    asl
+    asl
+    asl
+    asl
+    sta tmpv
+    lda gly2
+    lsr
+    ora tmpv
+    sta (ptr_dst),y
+    iny
+    // byte 2 = last bit of glyph 2 (x 16), glyph 3 at x 18-22
+    lda gly2
+    lsr                                // carry = last bit
+    lda #0
+    ror                                // moves it to bit 7
+    sta tmpv
+    lda gly3
+    asl
+    ora tmpv
+    sta (ptr_dst),y
+    iny
+    ldx rowi
+    inx
+    cpx #7
+    beq rd_done
+    jmp rd_row
+rd_done:
+    rts
+
+// ----------------------------------------------------------------------------
+//  Balloons. Five slots (sprites 3-7). b_y = 0 means the slot is free.
+//  They rise BALLOON_SPEED pixels a frame in front of the ledges. Touching
+//  one removes it and scores 200.
+// ----------------------------------------------------------------------------
+update_balloons:
+    jsr spawn_tick
+    dec banim_timer
+    bne ub_ptr
+    lda #BALLOON_ANIM_DELAY
+    sta banim_timer
+    lda banim_index
+    clc
+    adc #1
+    and #3
+    sta banim_index
+ub_ptr:
+    ldx banim_index
+    lda anim_sequence,x
+    clc
+    adc #(balloon_frames/64)
+    sta balloon_ptr
+    lda #7
+    sta emask
+    lda #0
+    sta msbmask
+    ldx #4
+ub_loop:
+    lda b_y,x
+    beq ub_next
+    sec
+    sbc #BALLOON_SPEED
+    cmp #BALLOON_TOP
+    bcs ub_alive
+    lda #0                             // floated off the top
+    sta b_y,x
+    beq ub_next
+ub_alive:
+    sta b_y,x
+    cmp #HIT_Y_MIN                     // level with the diver?
+    bcc ub_show
+    cmp #(HIT_Y_MAX+1)
+    bcs ub_show
+    sec                                // balloon X minus diver X (9 bit)
+    lda b_xl,x
+    sbc player_x_lo
+    sta tmpv
+    lda b_xh,x
+    sbc player_x_hi
+    beq ub_right
+    cmp #$ff
+    bne ub_show
+    lda tmpv                           // balloon to the left
+    cmp #(256-HIT_DX)
+    bcs ub_hit
+    bcc ub_show
+ub_right:
+    lda tmpv                           // balloon to the right (or level)
+    cmp #(HIT_DX+1)
+    bcs ub_show
+ub_hit:
+    lda #0                             // pop!
+    sta b_y,x
+    txa
+    pha
+    lda #0
+    ldx #BALLOON_POINTS_HI
+    jsr add_score
+    pla
+    tax
+    jmp ub_next
+ub_show:
+    txa
+    asl
+    tay
+    lda b_y,x
+    sta VIC_SPR3_Y,y
+    lda b_xl,x
+    sta VIC_SPR3_X,y
+    lda balloon_ptr
+    sta SPRITE_PTR3,x
+    lda emask
+    ora slot_bit,x
+    sta emask
+    lda b_xh,x
+    beq ub_next
+    lda msbmask
+    ora slot_bit,x
+    sta msbmask
+ub_next:
+    dex
+    bmi ub_end
+    jmp ub_loop
+ub_end:
+    lda emask
+    sta VIC_SPR_ENABLE
+    jmp update_sprite_x                // sets the X bit 8s
+
+// spawn_tick: count down to the next balloon
+spawn_tick:
+    lda spawn_lo
+    bne st_lo
+    dec spawn_hi
+st_lo:
+    dec spawn_lo
+    lda spawn_lo
+    ora spawn_hi
+    bne st_done
+    jsr spawn_balloon
+    jmp set_spawn_interval
+st_done:
+    rts
+
+// set_spawn_interval: 3 to 6 seconds, in frames, random
+set_spawn_interval:
+    lda #0
+    ldx #BALLOON_RANGE_SEC
+ssi_range:
+    clc
+    adc fps
+    dex
+    bne ssi_range
+    sta tmpv                           // range in frames
+    lda #0
+    ldx #BALLOON_MIN_SEC
+ssi_base:
+    clc
+    adc fps
+    dex
+    bne ssi_base
+    sta tmpv2                          // minimum in frames
+    jsr get_random
+    cmp tmpv
+    bcc ssi_ok
+    sbc tmpv                           // 0-255 folded into 0..range-1
+ssi_ok:
+    clc
+    adc tmpv2
+    sta spawn_lo
+    lda #0
+    adc #0
+    sta spawn_hi
+    rts
+
+// spawn_balloon: new balloon in a free slot, at a random column
+spawn_balloon:
+    ldx #4
+sb_find:
+    lda b_y,x
+    beq sb_found
+    dex
+    bpl sb_find
+    rts                                // all slots busy: skip this one
+sb_found:
+    jsr get_random                     // column 0-36
+    and #63
+    cmp #37
+    bcc sb_col
+    sbc #37
+sb_col:
+    sta tmpv
+    lda #0
+    sta b_xh,x
+    lda tmpv
+    asl                                // x = column * 8 (9 bit)
+    rol b_xh,x
+    asl
+    rol b_xh,x
+    asl
+    rol b_xh,x
+    sta b_xl,x
+    jsr get_random                     // plus 0-7 pixels of jitter
+    and #7
+    clc
+    adc b_xl,x
+    sta b_xl,x
+    bcc sb_jit
+    inc b_xh,x
+sb_jit:
+    lda b_xl,x                         // plus the left edge of the window
+    clc
+    adc #24
+    sta b_xl,x
+    bcc sb_edge
+    inc b_xh,x
+sb_edge:
+    lda #BALLOON_START_Y
+    sta b_y,x
+    jsr get_random
+    and #3
+    tay
+    lda balloon_colors,y
+    sta VIC_SPR3_COLOR,x
+    rts
+
+slot_bit:
+    .byte %00001000, %00010000, %00100000, %01000000, %10000000
+balloon_colors:
+    .byte 2, 4, 5, 10                  // red, purple, green, light red
+
 
 // ----------------------------------------------------------------------------
 //  get_random: A = random byte (SID voice 3 noise)
@@ -810,6 +1247,22 @@ print_loop:
     bne print_loop
 print_done:
     rts
+
+// ----------------------------------------------------------------------------
+//  5x7 digit font, 8 bytes per glyph (digits 0-9, then 10 = blank)
+// ----------------------------------------------------------------------------
+font_rows:
+    .byte %01110, %10001, %10011, %10101, %11001, %10001, %01110, 0   // 0
+    .byte %00100, %01100, %00100, %00100, %00100, %00100, %01110, 0   // 1
+    .byte %01110, %10001, %00001, %00010, %00100, %01000, %11111, 0   // 2
+    .byte %11110, %00001, %00001, %01110, %00001, %00001, %11110, 0   // 3
+    .byte %00010, %00110, %01010, %10010, %11111, %00010, %00010, 0   // 4
+    .byte %11111, %10000, %11110, %00001, %00001, %10001, %01110, 0   // 5
+    .byte %00110, %01000, %10000, %11110, %10001, %10001, %01110, 0   // 6
+    .byte %11111, %00001, %00010, %00100, %01000, %01000, %01000, 0   // 7
+    .byte %01110, %10001, %10001, %01110, %10001, %10001, %01110, 0   // 8
+    .byte %01110, %10001, %10001, %01111, %00001, %00010, %01100, 0   // 9
+    .byte %00000, %00000, %00000, %00000, %00000, %00000, %00000, 0   // blank
 
 // ----------------------------------------------------------------------------
 //  Messages
@@ -876,6 +1329,36 @@ is_pal:         .byte 0
 fps:            .byte 50
 fps_count:      .byte 0
 seconds:        .byte 0
+score_lo:       .byte 0                // BCD: tens, units
+score_dirty:    .byte 0                // HUD sprites needing a redraw
+time_dirty:     .byte 0
+shifted:        .byte 0                // 1 if this frame shifted the screen
+score_hi:       .byte 0                // BCD: thousands, hundreds
+dig0:           .byte 0                // glyph numbers for render_digits
+dig1:           .byte 0
+dig2:           .byte 0
+dig3:           .byte 0
+fnt0:           .byte 0
+fnt1:           .byte 0
+fnt2:           .byte 0
+fnt3:           .byte 0
+gly0:           .byte 0
+gly1:           .byte 0
+gly2:           .byte 0
+gly3:           .byte 0
+rowi:           .byte 0
+tmpv:           .byte 0
+tmpv2:          .byte 0
+spawn_lo:       .byte 0                // frames until the next balloon
+spawn_hi:       .byte 0
+banim_timer:    .byte 0
+banim_index:    .byte 0
+balloon_ptr:    .byte 0
+emask:          .byte 0                // sprite enable bits being built
+msbmask:        .byte 0                // balloons' X bit 8s
+b_y:            .fill 5, 0             // balloon slots: Y (0 = free), X low, X bit 8
+b_xl:           .fill 5, 0
+b_xh:           .fill 5, 0
 player_x_lo:    .byte 0
 player_x_hi:    .byte 0
 
@@ -957,238 +1440,84 @@ sprite_frames:
 .byte 0
 
 // ----------------------------------------------------------------------------
-//  Timer digits 0-9: 24x21 sprites, a 5x7 font drawn 4 pixels wide, 3 tall
+//  Balloon: three 24x21 frames. The body sways one way while the string
+//  wiggles the other.
 // ----------------------------------------------------------------------------
-digit_frames:
-// digit 0
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000011, %11111100   // ..####........########..
-.byte %00111100, %00000011, %11111100   // ..####........########..
-.byte %00111100, %00000011, %11111100   // ..####........########..
-.byte %00111100, %00111100, %00111100   // ..####....####....####..
-.byte %00111100, %00111100, %00111100   // ..####....####....####..
-.byte %00111100, %00111100, %00111100   // ..####....####....####..
-.byte %00111111, %11000000, %00111100   // ..########........####..
-.byte %00111111, %11000000, %00111100   // ..########........####..
-.byte %00111111, %11000000, %00111100   // ..########........####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte 0
-// digit 1
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
+balloon_frames:
+// balloon frame 0: body left, string swings right
+.byte %00000001, %11111000, %00000000   // .......######...........
+.byte %00000111, %11111110, %00000000   // .....##########.........
+.byte %00001100, %11111111, %00000000   // ....##..########........
+.byte %00011100, %11111111, %10000000   // ...###..#########.......
+.byte %00011111, %11111111, %10000000   // ...##############.......
+.byte %00011111, %11111111, %10000000   // ...##############.......
+.byte %00011111, %11111111, %10000000   // ...##############.......
+.byte %00011111, %11111111, %10000000   // ...##############.......
+.byte %00001111, %11111111, %00000000   // ....############........
+.byte %00001111, %11111111, %00000000   // ....############........
+.byte %00000111, %11111110, %00000000   // .....##########.........
 .byte %00000011, %11111100, %00000000   // ......########..........
-.byte %00000011, %11111100, %00000000   // ......########..........
-.byte %00000011, %11111100, %00000000   // ......########..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
+.byte %00000001, %11111000, %00000000   // .......######...........
+.byte %00000000, %11110000, %00000000   // ........####............
+.byte %00000000, %01100000, %00000000   // .........##.............
+.byte %00000000, %01100000, %00000000   // .........##.............
+.byte %00000000, %00110000, %00000000   // ..........##............
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %00001100, %00000000   // ............##..........
+.byte %00000000, %00001100, %00000000   // ............##..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
 .byte 0
-// digit 2
+// balloon frame 1: centred
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000011, %00111111, %11000000   // ......##..########......
+.byte %00000111, %00111111, %11100000   // .....###..#########.....
+.byte %00000111, %11111111, %11100000   // .....##############.....
+.byte %00000111, %11111111, %11100000   // .....##############.....
+.byte %00000111, %11111111, %11100000   // .....##############.....
+.byte %00000111, %11111111, %11100000   // .....##############.....
 .byte %00000011, %11111111, %11000000   // ......############......
 .byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000000, %11111111, %00000000   // ........########........
+.byte %00000000, %01111110, %00000000   // .........######.........
 .byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %00110000, %00000000   // ..........##............
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %00001100, %00000000   // ............##..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %00110000, %00000000   // ..........##............
 .byte 0
-// digit 3
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte 0
-// digit 4
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
+// balloon frame 2: body right, string swings left
+.byte %00000000, %00011111, %10000000   // ...........######.......
+.byte %00000000, %01111111, %11100000   // .........##########.....
+.byte %00000000, %11001111, %11110000   // ........##..########....
+.byte %00000001, %11001111, %11111000   // .......###..#########...
+.byte %00000001, %11111111, %11111000   // .......##############...
+.byte %00000001, %11111111, %11111000   // .......##############...
+.byte %00000001, %11111111, %11111000   // .......##############...
+.byte %00000001, %11111111, %11111000   // .......##############...
+.byte %00000000, %11111111, %11110000   // ........############....
+.byte %00000000, %11111111, %11110000   // ........############....
+.byte %00000000, %01111111, %11100000   // .........##########.....
 .byte %00000000, %00111111, %11000000   // ..........########......
-.byte %00000000, %00111111, %11000000   // ..........########......
-.byte %00000000, %00111111, %11000000   // ..........########......
-.byte %00000011, %11000011, %11000000   // ......####....####......
-.byte %00000011, %11000011, %11000000   // ......####....####......
-.byte %00000011, %11000011, %11000000   // ......####....####......
-.byte %00111100, %00000011, %11000000   // ..####........####......
-.byte %00111100, %00000011, %11000000   // ..####........####......
-.byte %00111100, %00000011, %11000000   // ..####........####......
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte 0
-// digit 5
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111100, %00000000, %00000000   // ..####..................
-.byte %00111100, %00000000, %00000000   // ..####..................
-.byte %00111100, %00000000, %00000000   // ..####..................
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte 0
-// digit 6
-.byte %00000000, %00111111, %11000000   // ..........########......
-.byte %00000000, %00111111, %11000000   // ..........########......
-.byte %00000000, %00111111, %11000000   // ..........########......
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00111100, %00000000, %00000000   // ..####..................
-.byte %00111100, %00000000, %00000000   // ..####..................
-.byte %00111100, %00000000, %00000000   // ..####..................
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111111, %11111111, %11000000   // ..################......
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte 0
-// digit 7
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00111111, %11111111, %11111100   // ..####################..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000000, %00111100, %00000000   // ..........####..........
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte %00000011, %11000000, %00000000   // ......####..............
-.byte 0
-// digit 8
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte 0
-// digit 9
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00000011, %11111111, %11000000   // ......############......
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00111100, %00000000, %00111100   // ..####............####..
-.byte %00000011, %11111111, %11111100   // ......################..
-.byte %00000011, %11111111, %11111100   // ......################..
-.byte %00000011, %11111111, %11111100   // ......################..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000000, %00111100   // ..................####..
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000000, %00000011, %11000000   // ..............####......
-.byte %00000011, %11111100, %00000000   // ......########..........
-.byte %00000011, %11111100, %00000000   // ......########..........
-.byte %00000011, %11111100, %00000000   // ......########..........
+.byte %00000000, %00011111, %10000000   // ...........######.......
+.byte %00000000, %00001111, %00000000   // ............####........
+.byte %00000000, %00000110, %00000000   // .............##.........
+.byte %00000000, %00000110, %00000000   // .............##.........
+.byte %00000000, %00001100, %00000000   // ............##..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %00110000, %00000000   // ..........##............
+.byte %00000000, %00110000, %00000000   // ..........##............
+.byte %00000000, %00011000, %00000000   // ...........##...........
 .byte 0
 
-.errorif digit_frames + 640 > $4000, "Sprite data must end below $4000"
+// HUD sprites, redrawn by render_digits (64 bytes each, start empty)
+score_sprite:
+    .fill 64, 0
+time_sprite:
+    .fill 64, 0
+
+.errorif score_sprite + 128 > $4000, "Sprite data must end below $4000"

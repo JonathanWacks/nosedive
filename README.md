@@ -4,8 +4,12 @@ A head-first diving game for the Commodore 64, written in [Kick Assembler](http:
 
 You've jumped off the platform and you're diving head first down a shaft. Ledges stick out of the
 left and right walls at random. Steer left and right to dodge them, touch one and it's game over.
-Reach the ground at the bottom and you win. A countdown in the top right corner shows how many
+Reach the ground at the bottom and you win. A countdown in the bottom right corner shows how many
 seconds are left until the ground, and it starts at 60.
+
+**Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
+landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
+random column. Fly into one to pop it.
 
 ## Build and run
 
@@ -32,8 +36,13 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   **both** walls, leaving a gap of 6-9 columns to steer through. The generator only accepts a row
   whose open space is within 3 columns of the previous ledge row's open space, so a narrow gap is
   never out of reach. Random numbers come from SID voice 3 noise.
-- **The timer** is two hardware sprites (sprites 1 and 2) showing a 5x7 font, so they stay still
-  while the shaft scrolls. The program detects PAL or NTSC at startup, counts 50 or 60 frames per
+- **The HUD** is two hardware sprites (1 = score, 2 = time), drawn double size from a 5x7 font. The
+  program redraws their pixels only when a number changes, one sprite per frame and never on a
+  frame that is busy scrolling, so they stay still while the shaft scrolls.
+- **Balloons** use sprites 3-7 (five slots). Each has three frames: the balloon sways one way while
+  its string wiggles the other. Touching is tested in code against the diver's position. Score is
+  kept in decimal (BCD) and stops at 9999.
+- **The timer** works like this: The program detects PAL or NTSC at startup, counts 50 or 60 frames per
   second, and sizes the level (a fixed number of rows) so the ground arrives as the clock reaches 0.
 - **The diver** is hardware sprite 0, held in the middle of the screen, with three animation
   frames played as 0, 1, 2, 1. It moves sideways only.
@@ -60,6 +69,10 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `LEDGE_MIN_LEN` | 11 | shortest ledge in columns (longest is this + 10) |
 | `LEDGE_GAP_MIN` | 7 | minimum blank rows between ledges (plus 0-3 random) |
 | `ANIM_DELAY` | 6 | frames per diver animation step |
+| `BALLOON_MIN_SEC` / `BALLOON_RANGE_SEC` | 3 / 3 | balloons appear every 3 to 6 seconds |
+| `BALLOON_SPEED` | 3 | pixels per frame balloons rise |
+| `BALLOON_POINTS_HI` | 2 | balloon score in hundreds (200) |
+| `LAND_BONUS_HI` | $10 | landing bonus in BCD hundreds (1000) |
 
 The ledge lengths and spacing are tuned so a player who looks ahead can always dodge, but the
 tightest case (two long ledges on opposite walls, 8 rows apart) leaves little spare time. If you
@@ -71,5 +84,5 @@ raise `SCROLL_SPEED` or lengthen ledges, the spacing may need to grow with it.
 |---|---|
 | `$0400` | screen RAM (the game scrolls this) |
 | `$0801` | BASIC loader, then the program |
-| `$2000` | diver sprite frames, then the ten timer digits (outside `$1000-$1fff`, where the VIC sees ROM) |
+| `$2000` | sprite data: diver frames, balloon frames, then the score and time sprites (outside `$1000-$1fff`, where the VIC sees ROM) |
 | `$d800` | colour RAM, set once |
