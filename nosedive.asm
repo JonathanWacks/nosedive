@@ -182,12 +182,12 @@
 .const INTRO_ROW      = 12             // text row of the opening ledge
 .const INTRO_LEN      = 12             // its length, in characters, from the left wall
 .const CH_SPIKE       = $cb            // spiked ball: deadly
-.const SPIKE_MASK     = 3              // a gap between ledges gets a spiked-ball cluster when (random AND mask) is 0: 1 in 4
+.const SPIKE_MASK     = 1              // a gap between ledges gets a spiked-ball cluster when (random AND mask) is 0: 1 in 2
 .const SPIKE_START_W  = 6              // blank rows left below the cluster's first row
 .const ROW_LAST       = SCREEN + 24*40 // the row new ledges are built on
 
 .const COL_BORDER     = 14             // light blue
-.const COL_BACKGROUND = 6              // blue
+.const COL_BACKGROUND = 0              // black
 .const COL_LEDGE      = 9              // brown: ledges and the pail (multicolour %10)
 .const COL_WOOD_LIGHT = 12             // orange: wood highlights (multicolour %01)
 .const COL_WATER      = 3              // cyan: the water (cell colour, multicolour %11)
@@ -2664,7 +2664,7 @@ slot_bit:
     .byte %00001000, %00010000, %00100000, %01000000, %10000000
 // one of eight, so black ones come up one time in four
 balloon_colors:
-    .byte 2, 4, 5, 10, 2, 5, 0, 0      // red, purple, green, light red, red, green, black, black
+    .byte 2, 4, 5, 10, 2, 5, 11, 11    // red, purple, green, light red, red, green, dark grey (the speed-ups: black would vanish on the black background)
 balloon_speeds:
     .byte 3, 2, 3, 4, 3, 3, 3, 3       // purple is slow, red and green are normal, light red is fast
 balloon_types:
