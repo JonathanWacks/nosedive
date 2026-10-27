@@ -186,7 +186,7 @@
 .const SPIKE_START_W  = 6              // blank rows left below the cluster's first row
 .const ROW_LAST       = SCREEN + 24*40 // the row new ledges are built on
 
-.const COL_BORDER     = 14             // light blue
+.const COL_BORDER     = 0              // black
 .const COL_BACKGROUND = 0              // black
 .const COL_LEDGE      = 9              // brown: ledges and the pail (multicolour %10)
 .const COL_WOOD_LIGHT = 12             // orange: wood highlights (multicolour %01)
@@ -2664,7 +2664,7 @@ slot_bit:
     .byte %00001000, %00010000, %00100000, %01000000, %10000000
 // one of eight, so black ones come up one time in four
 balloon_colors:
-    .byte 2, 4, 5, 10, 2, 5, 11, 11    // red, purple, green, light red, red, green, dark grey (the speed-ups: black would vanish on the black background)
+    .byte 2, 4, 5, 10, 2, 5, 15, 15    // red, purple, green, light red, red, green, light grey (the speed-ups)
 balloon_speeds:
     .byte 3, 2, 3, 4, 3, 3, 3, 3       // purple is slow, red and green are normal, light red is fast
 balloon_types:
