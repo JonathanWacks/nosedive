@@ -99,9 +99,9 @@
 .const PF_L           = WALL_W         // playfield columns (inside the walls)
 .const PF_R           = 39 - WALL_W
 .const PF_W           = 40 - 2*WALL_W
-.const LEDGE_MIN_LEN  = 10             // floating ledges are 10-18 columns long, wall ledges 10-13
+.const LEDGE_MIN_LEN  = 12             // floating ledges are 12-20 columns long, wall ledges 12-19
 .const MIN_FREE       = 5              // a gap must be at least this many columns
-.const LEDGE_GAP_MIN  = 8              // blank rows between ledges at the starting speed: 8-11
+.const LEDGE_GAP_MIN  = 10             // blank rows between ledges at the starting speed: 10-13
 .const SPEED_MAX       = 3              // anvils speed the fall up to this many pixels per frame
 // how far (columns) the diver can get between ledge rows at the starting speed. Faster
 // falls get proportionally more blank rows between ledges, so this stays the same.
@@ -109,8 +109,10 @@
 .const GAP_S2         = floor(((REACH1 + 2) * 8 * 2 / MOVE_SPEED + 29 + 8) / 8) - 1
 .const GAP_S3         = floor(((REACH1 + 2) * 8 * 3 / MOVE_SPEED + 29 + 8) / 8) - 1
 .const ANVIL_CELL     = 8 + 0          // black cell colour for the anvil's column (multicolour %11)
-.const ANVIL_MARGIN   = 30             // no anvils this close to the pail (its water is %11 too)
-.const ANVIL_MASK     = 63             // 1 in 64 gap rows holds an anvil pick-up
+.const ANVIL_MARGIN   = 40             // no anvils this close to the pail (its water is %11 too)
+.const ANVIL_MASK     = 7              // a ledge with a wide lane gets an anvil 1 time in (mask+1); narrow lanes always do
+.const ANVIL_NARROW   = 10             // a lane is narrow when its range of diver positions is under this
+.const ANVIL_AHEAD    = 2              // blank rows between the anvil and the ledge row it guards
                                        // columns the diver can surely cover between two ledge
                                        // rows (a row passes him in 29 pixels of scroll), less 2
 .const START_GAP      = 6              // blank rows before the first ledge
@@ -583,9 +585,13 @@ iw_c:
     sta ledge_wait
     lda #$ff
     sta anv_col
+    lda #1
+    sta after_ledge                    // the first gap row plans the first ledge
     lda #0
-    sta after_ledge
     sta wall_side
+    sta plan_ok
+    lda #$ff
+    sta anv_plan
     lda #SCROLL_SPEED                  // anvils change this during a run
     sta speed
     jsr set_reach
@@ -994,34 +1000,29 @@ pail_kind:  .byte 0,  1,  2,  3,  3,  4,  3,  3,  3,  3,  4,  3,  3,  2,  5
 pail_a:     .byte 8,  8,  7,  8,  8,  9,  9,  9, 10, 10, 11, 11, 11, 12, 0
 pail_b:     .byte 31, 31, 32, 31, 31, 30, 30, 30, 29, 29, 28, 28, 28, 27, 39
 
-// maybe_anvil: put an anvil pick-up at a random column of the row in row_buf (1 in 64)
+// maybe_anvil: called for every gap row (row_buf already holds the blank row).
+// The first gap row after a ledge plans the next ledge; ANVIL_AHEAD rows above that
+// ledge the planned anvil is put in.
 maybe_anvil:
-    lda after_ledge                    // never right under a ledge ...
-    beq ma_below
+    lda after_ledge
+    beq ma_place
     lda #0
     sta after_ledge
-    rts
-ma_below:
-    lda ledge_wait                     // ... or right on top of one
+    jmp plan_ledge
+ma_place:
+    lda anv_plan
+    cmp #$ff
     beq ma_no
+    lda ledge_wait
+    cmp #ANVIL_AHEAD
+    bne ma_no
+    ldx anv_plan
+    lda #$ff
+    sta anv_plan
     lda anv_col                        // one anvil at a time
     cmp #$ff
     bne ma_no
-    lda rows_hi
-    bne ma_far
-    lda rows_lo
-    cmp #ANVIL_MARGIN
-    bcc ma_no
-ma_far:
-    jsr get_random
-    and #ANVIL_MASK
-    bne ma_no
-    jsr get_random
-    and #31
-    clc
-    adc #(PF_L + 1)
-    sta anv_col
-    tax
+    stx anv_col
     lda #CH_ANVIL
     sta row_buf,x
     lda #0
@@ -1029,6 +1030,91 @@ ma_far:
     lda #ANVIL_CELL                    // the anvil's column is painted black while it exists
     jmp anvil_paint
 ma_no:
+    rts
+
+// plan_ledge: choose the next ledge row now (pick, check reach, retry), so it is known
+// while the gap rows are built. plan_ok = 0 if nothing fair was found.
+plan_ledge:
+    lda #0
+    sta plan_ok
+    lda #$ff
+    sta anv_plan
+    lda #TRIES
+    sta tries
+pl_try:
+    jsr pick_ledge                     // carry clear = unusable candidate
+    bcc pl_retry
+    jsr check_reach                    // carry clear = too far from last gap
+    bcs pl_accept
+pl_retry:
+    dec tries
+    bne pl_try
+    rts
+pl_accept:
+    lda seg1_s
+    sta plan_s1
+    lda seg1_n
+    sta plan_n1
+    lda seg2_s
+    sta plan_s2
+    lda seg2_n
+    sta plan_n2
+    lda ci_n
+    sta plan_cn
+    lda ci_a
+    sta plan_ca
+    lda ci_a+1
+    sta plan_ca+1
+    lda ci_b
+    sta plan_cb
+    lda ci_b+1
+    sta plan_cb+1
+    lda cand_side
+    sta plan_side
+    lda #1
+    sta plan_ok
+
+    // an anvil goes in the only lane the diver can use, where he is now heading, so
+    // he has to swerve to avoid it
+    lda plan_cn
+    cmp #1
+    bne pl_done
+    lda rows_hi                        // not near the pail
+    bne pl_far
+    lda rows_lo
+    cmp #ANVIL_MARGIN
+    bcc pl_done
+pl_far:
+    lda plan_cb
+    sec
+    sbc plan_ca
+    cmp #ANVIL_NARROW
+    bcc pl_go                          // narrow lane: always
+    jsr get_random
+    and #ANVIL_MASK
+    bne pl_done
+pl_go:
+    lda #24
+    jsr x_to_col                       // diver's left column
+    clc
+    adc #1                             // his middle column
+    ldx plan_ca
+    inx
+    stx tmpv
+    cmp tmpv
+    bcs pl_lo_ok
+    lda tmpv
+pl_lo_ok:
+    ldx plan_cb
+    inx
+    stx tmpv
+    cmp tmpv
+    bcc pl_hi_ok
+    beq pl_hi_ok
+    lda tmpv
+pl_hi_ok:
+    sta anv_plan
+pl_done:
     rts
 
 // anvil_paint: A = colour RAM value; fill the anvil's column with it
@@ -1095,24 +1181,38 @@ io_no:
 // ----------------------------------------------------------------------------
 row_ledge:
     lda #1
-    sta after_ledge                    // (no anvil in the next gap row)
+    sta after_ledge                    // (the next gap row plans the following ledge)
     jsr get_random                     // blank rows before the next ledge row
     and #3
     clc
     adc gap_min
     sta ledge_wait
-
-    lda #TRIES
-    sta tries
-ledge_try:
-    jsr pick_ledge                     // carry clear = unusable candidate
-    bcc ledge_retry
-    jsr check_reach                    // carry clear = too far from last gap
-    bcs ledge_accept
-ledge_retry:
-    dec tries
-    bne ledge_try
-    jmp row_blank                      // nothing fair found: empty row
+    lda plan_ok                        // draw the ledge planned in the gap
+    bne rl_draw
+    jmp row_blank                      // none was fair: empty row
+rl_draw:
+    lda #0
+    sta plan_ok
+    lda plan_s1
+    sta seg1_s
+    lda plan_n1
+    sta seg1_n
+    lda plan_s2
+    sta seg2_s
+    lda plan_n2
+    sta seg2_n
+    lda plan_cn
+    sta ci_n
+    lda plan_ca
+    sta ci_a
+    lda plan_ca+1
+    sta ci_a+1
+    lda plan_cb
+    sta ci_b
+    lda plan_cb+1
+    sta ci_b+1
+    lda plan_side
+    sta cand_side
 
 ledge_accept:
     jsr row_blank                      // walls only
@@ -1192,8 +1292,8 @@ ps_start:
     jsr get_random                     // some ledges stick out of a wall instead
     and #FLOAT_MASK
     beq ps_free
-    jsr get_random                     // a wall ledge is short, so the diver can always
-    and #3                             // cross to the other side before the next one ...
+    jsr get_random                     // a wall ledge is at most REACH long, so the diver can
+    and #7                             // always cross to the other side before the next one ...
     clc
     adc #LEDGE_MIN_LEN
     sta seg1_n
@@ -2380,6 +2480,16 @@ anv_col:        .byte $ff              // column of the anvil on screen ($ff = n
 anv_age:        .byte 0                // shifts since it arrived
 wall_side:      .byte 0                // side of the last wall ledge: 0 = left, 1 = right
 cand_side:      .byte 0                // same for the candidate row ($ff = not a wall ledge)
+plan_ok:        .byte 0                // 1 = a ledge row is planned
+plan_s1:        .byte 0
+plan_n1:        .byte 0
+plan_s2:        .byte 0
+plan_n2:        .byte 0
+plan_cn:        .byte 0
+plan_ca:        .byte 0, 0
+plan_cb:        .byte 0, 0
+plan_side:      .byte 0
+anv_plan:       .byte $ff              // column planned for the next anvil ($ff = none)
 after_ledge:    .byte 0                // 1 = the previous row was a ledge row
 ta_row:         .byte 0
 ta_last:        .byte 0

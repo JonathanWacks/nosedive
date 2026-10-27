@@ -11,7 +11,7 @@ rows are left until the water (about 376 at the start). It counts rows, not seco
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
 random column. Fly into one to pop it. A **bird** flaps across the shaft every 10-17 seconds;
-flying into it is fatal. **Anvils** (small black blocks with a grey top) sit in the gaps between ledges, never directly above or below a ledge; touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
+flying into it is fatal. **Anvils** (small black blocks with a grey top) are planted where they're hard to dodge: a ledge row is planned a few rows early, and if it leaves only one lane to pass through, an anvil goes in that lane two blank rows above the ledge, in the column the diver is heading for (always for a narrow lane, sometimes for a wide one); touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
 
 ## Build and run
 
@@ -35,14 +35,14 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   every character uses the same colour.
 - **Brick walls.** The outer `WALL_W` (3) columns on each side are a red brick character, set once
   in colour RAM; every new row is built with bricks at both ends.
-- **Ledges.** Each new bottom row is either blank or a ledge row, one every 9-12 rows at the starting speed (further apart after an anvil, so the diver always has the same time to react). Three kinds:
-  **wall ledges** (3 in 4 of the single ledges): 10-13 columns, flush with a wall, usually on the
+- **Ledges.** Each new bottom row is either blank or a ledge row, one every 11-14 rows at the starting speed (further apart after an anvil, so the diver always has the same time to react). Three kinds:
+  **wall ledges** (3 in 4 of the single ledges): 12-19 columns, flush with a wall, usually on the
   opposite wall to the previous wall ledge so the free side keeps changing; **floating ledges**
-  of 10-18 columns; and (one row in four proposed) a **double**, one ledge from each wall leaving
+  of 12-20 columns; and (one row in four proposed) a **double**, one ledge from each wall leaving
   a gap of 6-9 columns to steer through. The diver only sees
   about 10 rows ahead, so the generator checks reachability: from every usable open space in the
   previous ledge row (both ends and the middle), some open space in the new row must be within
-  `REACH` columns (14), which is derived from the row spacing and the steering speed.
+  `REACH` columns (20), which is derived from the row spacing and the steering speed.
   Random numbers come from SID voice 3 noise.
 - **Quiet-frame row building.** The next row is built into `row_buf` on a frame that isn't busy
   scrolling and copied in on the shift frame, keeping every frame inside the NTSC cycle budget.
@@ -83,7 +83,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | Constant | Default | Meaning |
 |---|---|---|
 | `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls at the start (anvils raise it, up to `SPEED_MAX` = 3) |
-| `ANVIL_MASK` | 63 | 1 in (mask+1) gap rows holds an anvil (one on screen at a time) |
+| `ANVIL_MASK` / `ANVIL_NARROW` / `ANVIL_AHEAD` | 7 / 10 / 2 | a ledge with a wide single lane gets an anvil 1 time in 8 (narrow lanes, fewer than `ANVIL_NARROW` diver positions, always); it sits `ANVIL_AHEAD` blank rows above the ledge. One anvil on screen at a time |
 | `COL_WOOD_LIGHT` | 12 | the shared %01 colour (mid grey): anvil tops, ledge edges, pail hoop, brick mortar |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
 | `TIME_LIMIT` | 60 | seconds from jump to ground at the starting speed; the level length (in rows) follows from it |
@@ -94,9 +94,9 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
 | `DOUBLE_MASK` | 3 | 1 ledge row in (mask+1) has ledges on both walls |
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
-| `REACH1` | derived (14) | how far, in columns, the diver can move between ledge rows at the starting speed; computed from `LEDGE_GAP_MIN` and `MOVE_SPEED`. `GAP_S2` / `GAP_S3` (14 / 19) are the blank rows needed between ledges at speeds 2 and 3 to keep the same reach |
+| `REACH1` | derived (20) | how far, in columns, the diver can move between ledge rows at the starting speed; computed from `LEDGE_GAP_MIN` and `MOVE_SPEED`. `GAP_S2` / `GAP_S3` (18 / 25) are the blank rows needed between ledges at speeds 2 and 3 to keep the same reach |
 | `WALL_W` | 3 | width of the brick walls in columns |
-| `LEDGE_MIN_LEN` | 10 | shortest ledge in columns (floating: up to 18; wall-mounted: up to 13, within `REACH`) |
+| `LEDGE_MIN_LEN` | 12 | shortest ledge in columns (floating: up to 20; wall-mounted: up to 19, within `REACH`) |
 | `MIN_FREE` | 5 | narrowest open space that counts as passable |
 | `BIRD_MIN_SEC` / `BIRD_RANGE_MASK` | 10 / 7 | a bird every 10 to 17 seconds |
 | `BIRD_SPEED` | 2 | pixels per frame the bird flies |
@@ -104,7 +104,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `BIRD_Y_MIN` / `BIRD_Y_MASK` | 165 / 63 | bird starts below the diver at 165 plus a random 0-63 |
 | `BIRD_RISE` | 1 | pixels per frame the bird climbs; it vanishes above `BIRD_Y_TOP` (50) |
 | `BIRD_HIT_*` | | bounding box used for the bird hit test |
-| `LEDGE_GAP_MIN` | 8 | minimum blank rows between ledges at speed 1 (plus 0-3 random) |
+| `LEDGE_GAP_MIN` | 10 | minimum blank rows between ledges at speed 1 (plus 0-3 random) |
 | `ANIM_DELAY` | 6 | frames per diver animation step |
 | `BALLOON_MIN_SEC` / `BALLOON_RANGE_SEC` | 3 / 3 | balloons appear every 3 to 6 seconds |
 | `balloon_speeds` | 3, 2, 3, 4 | table by balloon colour (red, purple, green, light red): pixels per frame it rises |
