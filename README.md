@@ -10,12 +10,12 @@ up the screen with it. You can walk left and right along it (slower than diving 
 off the end and you dive again. The sides of a ledge are solid: fall or walk into one and you're simply stopped, you don't get put on top. A coin sits on top of every other ledge character; walk over one to collect it, dropping back to your normal height. Get carried off the top of
 the screen and it's game over, so keep diving.
 Reach the bottom and dive into a big wooden pail of water to win. Miss the pail or clip its rim and it's game over. A counter in the bottom right corner shows how many
-rows are left until the water (about 376 at the start). It counts rows, not seconds, so anvils make it fall faster.
+rows are left until the water (about 376 at the start). It counts rows, not seconds, so black balloons make it fall faster.
 
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, 20 for each coin, and 1000 for
-landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
-random column. Fly into one to pop it. A **bird** flaps across the shaft every 10-17 seconds;
-flying into it is fatal. **Anvils** (small black blocks with a grey top) are planted where they're hard to dodge: a ledge row is planned a few rows early, and if it leaves only one lane to pass through, a cluster of three anvils goes in that lane, the last two blank rows above the ledge: first in the column the diver is heading for, then the far side of the lane, then the first column again, two rows apart so dodging one means weaving into the next (always for a narrow lane, sometimes for a wide one; picking up several still only adds one step each, up to 3); touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
+landing. **Balloons** drift up the screen in front of the ledges, one every 1-4 seconds at a
+random column. Fly into one to pop it. One in four is **black**: popping it scores nothing and speeds the fall up by one step (up to `SPEED_MAX`, 3), as anvils do. A **bird** flaps across the shaft every 10-17 seconds;
+flying into it is fatal. **Anvils** (currently switched off with `ANVILS_ON = 0`; black balloons took over their job) (small black blocks with a grey top) are planted where they're hard to dodge: a ledge row is planned a few rows early, and if it leaves only one lane to pass through, a cluster of three anvils goes in that lane, the last two blank rows above the ledge: first in the column the diver is heading for, then the far side of the lane, then the first column again, two rows apart so dodging one means weaving into the next (always for a narrow lane, sometimes for a wide one; picking up several still only adds one step each, up to 3); touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
 
 ## Build and run
 
@@ -88,7 +88,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls at the start (anvils raise it, up to `SPEED_MAX` = 3) |
+| `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls at the start (black balloons raise it, up to `SPEED_MAX` = 3) |
 | `ANVIL_MASK` / `ANVIL_NARROW` / `ANVIL_AHEAD` | 7 / 10 / 2 | a ledge with a wide single lane gets an anvil 1 time in 8 (narrow lanes, fewer than `ANVIL_NARROW` diver positions, always); it sits `ANVIL_AHEAD` blank rows above the ledge. Up to 3 anvils (a cluster) on screen at a time |
 | `COL_WOOD_LIGHT` | 12 | the shared %01 colour (mid grey): anvil tops, ledge edges, pail hoop, brick mortar |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
@@ -115,7 +115,9 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `BIRD_HIT_*` | | bounding box used for the bird hit test |
 | `LEDGE_GAP_MIN` | 10 | minimum blank rows between ledges at speed 1 (plus 0-3 random) |
 | `ANIM_DELAY` | 6 | frames per diver animation step |
-| `BALLOON_MIN_SEC` / `BALLOON_RANGE_SEC` | 3 / 3 | balloons appear every 3 to 6 seconds |
+| `BALLOON_MIN_SEC` / `BALLOON_RANGE_SEC` | 1 / 3 | balloons appear every 1 to 4 seconds |
+| `balloon_colors` / `balloon_types` | | eight entries picked at random: red, purple, green, light red, red, green, black, black |
+| `ANVILS_ON` | 0 | 1 plants anvil clusters again |
 | `balloon_speeds` | 3, 2, 3, 4 | table by balloon colour (red, purple, green, light red): pixels per frame it rises |
 | `BALLOON_POINTS_HI` | 2 | balloon score in hundreds (200) |
 | `LAND_BONUS_HI` | $10 | landing bonus in BCD hundreds (1000) |

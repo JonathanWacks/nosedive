@@ -110,6 +110,7 @@
 .const REACH1         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 1 * MOVE_SPEED / 8) - 2
 .const REACH2         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 2 * MOVE_SPEED / 8) - 2 + REACH_SLACK
 .const REACH3         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 3 * MOVE_SPEED / 8) - 2 + REACH_SLACK
+.const ANVILS_ON      = 0              // 1 = plant anvil clusters (off for now: black balloons do the job)
 .const ANVIL_CELL     = 8 + 0          // black cell colour for the anvil's column (multicolour %11)
 .const ANVIL_MARGIN   = 40             // no anvils this close to the pail (its water is %11 too)
 .const ANVIL_MASK     = 7              // a ledge with a wide lane gets an anvil 1 time in (mask+1); narrow lanes always do
@@ -121,7 +122,7 @@
 .const END_GAP        = 18             // blank rows between last ledge and ground
 .const ANIM_DELAY     = 6              // frames per diver animation step
 
-.const BALLOON_MIN_SEC = 3             // seconds between balloons: 3 to 6
+.const BALLOON_MIN_SEC = 1             // seconds between balloons: 1 to 4
 .const BALLOON_RANGE_SEC = 3           // (range x fps must be 128 or more)
 .const BIRD_MIN_SEC   = 10             // a bird every 10-17 seconds
 .const BIRD_RANGE_MASK = 7
@@ -1444,6 +1445,12 @@ anv_when:
 place_coins:
     lda plan_ok
     beq pc_done
+    lda rows_hi                        // not if the ledge will not be drawn, because the
+    bne pc_ok                          // level is about to end (run-out rows are blank)
+    lda rows_lo
+    cmp #(END_GAP + 1)
+    bcc pc_done
+pc_ok:
     ldx plan_s1
     ldy plan_n1
     jsr coin_seg
@@ -1508,6 +1515,8 @@ pl_accept:
     lda #1
     sta plan_ok
 
+    lda #ANVILS_ON
+    beq pl_done
     // an anvil goes in the only lane the diver can use, where he is now heading, so
     // he has to swerve to avoid it
     lda plan_cn
@@ -2295,9 +2304,15 @@ ub_hit:
     sta b_speed,x
     txa
     pha
+    lda b_type,x
+    bne ub_black
     lda #0
     ldx #BALLOON_POINTS_HI
     jsr add_score
+    jmp ub_popped
+ub_black:
+    jsr speed_up                       // black balloon: the fall gets faster
+ub_popped:
     pla
     tax
     jmp ub_next
@@ -2419,20 +2434,25 @@ sb_edge:
     lda #BALLOON_START_Y
     sta b_y,x
     jsr get_random
-    and #3
+    and #7
     tay
     lda balloon_colors,y
     sta VIC_SPR3_COLOR,x
     lda balloon_speeds,y
     sta b_speed,x
+    lda balloon_types,y
+    sta b_type,x
     rts
 
 slot_bit:
     .byte %00001000, %00010000, %00100000, %01000000, %10000000
+// one of eight, so black ones come up one time in four
 balloon_colors:
-    .byte 2, 4, 5, 10                  // red, purple, green, light red
+    .byte 2, 4, 5, 10, 2, 5, 0, 0      // red, purple, green, light red, red, green, black, black
 balloon_speeds:
-    .byte 3, 2, 3, 4                   // purple is slow, red and green are normal, light red  is fast
+    .byte 3, 2, 3, 4, 3, 3, 3, 3       // purple is slow, red and green are normal, light red is fast
+balloon_types:
+    .byte 0, 0, 0, 0, 0, 0, 1, 1       // 1 = black: speeds the fall up instead of scoring
 
 
 // ----------------------------------------------------------------------------
@@ -3077,6 +3097,7 @@ msbmask:        .byte 0                // balloons' X bit 8s
 b_y:            .fill 5, 0             // balloon slots: Y (0 = free), X low, X bit 8
 b_xl:           .fill 5, 0
 b_xh:           .fill 5, 0
+b_type:         .fill 5, 0             // balloon type: 1 = black
 b_speed:        .fill 5, 0             // balloon speeds
 b_vx:           .fill 5, 0             // droplet sideways speeds
 player_x_lo:    .byte 0
