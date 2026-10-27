@@ -1587,11 +1587,20 @@ pk_far:
     jsr get_random
     and spike_mask
     bne pk_ret
+    lda #8
+    sta sp_t
+pk_try:
     jsr get_random
     and #31
     clc
     adc #PF_L
     sta spike_c                        // left column of the middle row: 3..34
+    jsr spike_chk                      // must be in the open gap, not above the next ledge
+    bcc pk_found
+    dec sp_t
+    bne pk_try
+    rts                                // nowhere fair this time
+pk_found:
     lda #3
     sta spike_stage
 pk_go:
@@ -1611,6 +1620,41 @@ pk_put:
     sta row_buf,x
     dec spike_stage
 pk_ret:
+    rts
+
+// spike_chk: carry set if the cluster at spike_c (plus 2 columns of room each side) would
+// overlap a column of the planned ledge, i.e. sit above it instead of in the open gap
+spike_chk:
+    lda plan_ok
+    beq sk_none
+    lda plan_n1
+    ldx plan_s1
+    jsr sk_one
+    bcs sk_ret
+    lda plan_n2
+    ldx plan_s2
+sk_one:
+    cmp #0
+    beq sk_none
+    stx sp_s
+    clc
+    adc sp_s
+    sta sp_e                           // segment is columns s .. e-1
+    lda spike_c
+    sec
+    sbc #2
+    cmp sp_e
+    bcs sk_none                        // cluster room starts at or after the segment's end
+    lda spike_c
+    clc
+    adc #4
+    cmp sp_s
+    bcc sk_none                        // cluster room ends before the segment
+    sec
+sk_ret:
+    rts
+sk_none:
+    clc
     rts
 
 // place_coins: a coin above every other character of the planned ledge row
@@ -3417,6 +3461,9 @@ cc_row:         .byte 0
 cc_last:        .byte 0
 spike_stage:    .byte 0                // rows of the cluster still to place (3, 2, 1)
 spike_c:        .byte 0
+sp_t:           .byte 0
+sp_s:           .byte 0
+sp_e:           .byte 0
 spike_mask:     .byte SPIKE_MASK
 intro:          .byte 0                // 1 during the opening run
 pb_i:           .byte 0

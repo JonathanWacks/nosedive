@@ -98,7 +98,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `FALL_SPEED` / `WALK_SPEED` / `WALK_ANIM_DELAY` | 3 / 2 / 5 | pixels per frame he drops back to `PLAYER_Y`, pixels per frame he walks on a ledge, frames per walking step |
 | `COIN_POINTS` | $20 | BCD points per coin |
 | `INTRO_ROW` / `INTRO_LEN` | 12 / 12 | the opening animation: the diver starts on a ledge of `INTRO_LEN` characters attached to the left wall, runs to its end by himself (joystick ignored) and dives off |
-| `SPIKE_MASK` / `SPIKE_START_W` | 3 / 6 | a gap gets a spiked-ball cluster when `random AND mask` is 0 (1 in 4); it starts `SPIKE_START_W` rows above the next ledge. Checked in software by `check_spikes` |
+| `SPIKE_MASK` / `SPIKE_START_W` | 3 / 6 | a gap gets a spiked-ball cluster when `random AND mask` is 0 (1 in 4); it starts `SPIKE_START_W` rows above the next ledge, in the open gap: never within 2 columns of the planned ledge, so it never sits above one. Checked in software by `check_spikes` |
 | `DIVE_TOP_Y` | 56 | sprite Y above which he is off the top of the screen |
 | `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |
 | `SPLASH_FRAMES` / `SINK_FRAMES` | 100 / 30 | length of the splash scene / frames the shaft keeps scrolling while the diver sinks |
