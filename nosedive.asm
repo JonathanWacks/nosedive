@@ -179,6 +179,8 @@
 .const CH_ANVIL       = $c9            // anvil pick-up
 .const CH_COIN        = $ca            // coin on top of a ledge
 .const COIN_POINTS    = $20            // BCD: 20 points
+.const INTRO_ROW      = 12             // text row of the opening ledge
+.const INTRO_LEN      = 12             // its length, in characters, from the left wall
 .const CH_SPIKE       = $cb            // spiked ball: deadly
 .const SPIKE_MASK     = 3              // a gap between ledges gets a spiked-ball cluster when (random AND mask) is 0: 1 in 4
 .const SPIKE_START_W  = 6              // blank rows left below the cluster's first row
@@ -289,6 +291,7 @@ start:
 
 new_game:
     jsr init_game
+    jsr intro_setup
 
 // ----------------------------------------------------------------------------
 //  Main loop - one pass per video frame
@@ -321,6 +324,13 @@ still_flying:
     bcc physics_ok
     jmp crashed
 physics_ok:
+    lda intro                          // opening run: over once he steps off the ledge
+    beq intro_done
+    lda on_ledge
+    bne intro_done
+    lda #0
+    sta intro
+intro_done:
     jsr move_diver                     // (sideways, stopped by the sides of ledges)
     jsr check_spikes                   // carry set = touching a spiked ball
     bcc spikes_ok
@@ -645,6 +655,7 @@ ig_anv:
     bpl ig_anv
     lda #0
     sta spike_stage
+    sta intro
     lda #1
     sta after_ledge                    // the first gap row plans the first ledge
     lda #0
@@ -749,6 +760,39 @@ update_sprite_x:
     rts
 
 // ----------------------------------------------------------------------------
+//  intro_setup: opening animation. The diver starts on a ledge attached to the left
+//  wall, runs to its end by himself and dives off; the joystick is ignored until then.
+// ----------------------------------------------------------------------------
+intro_setup:
+    ldx #(INTRO_LEN - 1)
+    lda #CH_LEDGE
+is_ledge:
+    sta SCREEN + INTRO_ROW*40 + PF_L,x
+    dex
+    bpl is_ledge
+    lda #(34 + 8*INTRO_ROW)            // standing on it, as diver_physics would have him
+    sta diver_y
+    sta VIC_SPR0_Y
+    lda #X_MIN
+    sta player_x_lo
+    lda #0
+    sta player_x_hi
+    lda #1
+    sta on_ledge
+    sta intro
+    jmp update_sprite_x
+
+// read_joy: the joystick, or "right" while the opening run is on
+read_joy:
+    lda intro
+    beq rj_real
+    lda #$f7
+    rts
+rj_real:
+    lda CIA1_PORT_A
+    rts
+
+// ----------------------------------------------------------------------------
 //  move_diver: joystick left/right moves the diver, clamped to the screen
 // ----------------------------------------------------------------------------
 move_diver:
@@ -764,7 +808,7 @@ mv_speed_ok:
     sta mv_speed
     lda #0
     sta moving
-    lda CIA1_PORT_A
+    jsr read_joy
     and #$04                           // bit 2 clear = left
     bne check_right
     lda #1
@@ -785,7 +829,7 @@ mv_speed_ok:
     sta player_x_lo
 
 check_right:
-    lda CIA1_PORT_A
+    jsr read_joy
     and #$08                           // bit 3 clear = right
     bne move_done
     lda #0
@@ -3142,6 +3186,7 @@ cc_last:        .byte 0
 spike_stage:    .byte 0                // rows of the cluster still to place (3, 2, 1)
 spike_c:        .byte 0
 spike_mask:     .byte SPIKE_MASK
+intro:          .byte 0                // 1 during the opening run
 yscroll:        .byte 0                // current vertical fine scroll, 0-7
 anim_timer:     .byte 0
 anim_index:     .byte 0
