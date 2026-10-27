@@ -197,6 +197,7 @@
 .const COL_BIRD       = 15             // light grey
 .const COL_DIVER      = 7              // yellow
 .const COL_TEXT       = 1              // white
+.const COL_BIG        = 8 + 7          // multicolour yellow: the fill of the big outlined letters
 .const COL_TIMER      = 1              // white
 .const COL_SCORE      = 3              // cyan
 .const COL_WIN        = 5              // green
@@ -274,7 +275,7 @@ start:
     jsr init_game
     lda #<txt_title
     ldx #>txt_title
-    jsr print_text
+    jsr print_big
     lda #<txt_help1
     ldx #>txt_help1
     jsr print_text
@@ -507,7 +508,10 @@ landed:
     sta VIC_BORDER
     lda #<txt_landed
     ldx #>txt_landed
-    jsr print_text
+    jsr print_big
+    lda #<txt_landed2
+    ldx #>txt_landed2
+    jsr print_big
     lda #<txt_again
     ldx #>txt_again
     jsr print_text
@@ -518,7 +522,7 @@ crashed:
     sta VIC_BORDER
     lda #<txt_crashed
     ldx #>txt_crashed
-    jsr print_text
+    jsr print_big
     lda #<txt_retry
     ldx #>txt_retry
     jsr print_text
@@ -2998,6 +3002,14 @@ sc_font:                               // our own font for screen codes $00-$3f
     sta CHARSET+$100,x
     inx
     bne sc_font
+    ldx #0
+sc_big:                                // big outlined letters: screen codes $40-$7f
+    lda big_data,x
+    sta CHARSET+$200,x
+    lda big_data+$100,x
+    sta CHARSET+$300,x
+    inx
+    bne sc_big
     ldx #7
 sc_solid:
     lda #$aa                           // all %10: solid brown
@@ -3080,6 +3092,78 @@ font_data:
     .byte $00, $00, $00, $00, $00, $00, $00, $00     // $3e (blank)
     .byte $7c, $ee, $0e, $3c, $38, $00, $38, $00     // $3f ?
 
+//  big_data: 2x2-cell multicolour letters (%11 fill, %10 outline). Quarter q (0 top-left,
+//  1 top-right, 2 bottom-left, 3 bottom-right) of glyph n is screen code $40 + 16q + n;
+//  n = 0 for '!', 1-15 for A D E F G I L M N O R S U V Y (see big_map). Generated.
+big_data:
+    .byte $0a, $0b, $0b, $0b, $0b, $0b, $0b, $0b     // ! TL
+    .byte $2a, $2f, $af, $ba, $b8, $b8, $ba, $bf     // A TL
+    .byte $aa, $bf, $bf, $ba, $b8, $b8, $b8, $b8     // D TL
+    .byte $aa, $bf, $bf, $ba, $ba, $bf, $bf, $ba     // E TL
+    .byte $aa, $bf, $bf, $ba, $ba, $bf, $bf, $ba     // F TL
+    .byte $2a, $2f, $af, $ba, $ba, $ba, $ba, $ba     // G TL
+    .byte $aa, $bf, $bf, $ab, $0b, $0b, $0b, $0b     // I TL
+    .byte $a8, $b8, $b8, $b8, $b8, $b8, $b8, $b8     // L TL
+    .byte $a8, $b8, $ba, $be, $be, $bb, $bb, $ba     // M TL
+    .byte $a8, $b8, $ba, $be, $be, $bb, $bb, $ba     // N TL
+    .byte $2a, $2f, $af, $ba, $b8, $b8, $b8, $b8     // O TL
+    .byte $aa, $bf, $bf, $ba, $ba, $bf, $bf, $bb     // R TL
+    .byte $2a, $2f, $af, $ba, $ba, $af, $2f, $2a     // S TL
+    .byte $a8, $b8, $b8, $b8, $b8, $b8, $b8, $b8     // U TL
+    .byte $a8, $b8, $b8, $b8, $b8, $b8, $ba, $ae     // V TL
+    .byte $a8, $b8, $ba, $ae, $2e, $2b, $0b, $0b     // Y TL
+    .byte $a0, $e0, $e0, $e0, $e0, $e0, $e0, $e0     // ! TR
+    .byte $a8, $f8, $fa, $ae, $2e, $2e, $ae, $fe     // A TR
+    .byte $a8, $f8, $fa, $ae, $2e, $2e, $2e, $2e     // D TR
+    .byte $aa, $fe, $fe, $aa, $a8, $f8, $f8, $a8     // E TR
+    .byte $aa, $fe, $fe, $aa, $a8, $f8, $f8, $a8     // F TR
+    .byte $aa, $fe, $fe, $aa, $aa, $fe, $fe, $ae     // G TR
+    .byte $aa, $fe, $fe, $ea, $e0, $e0, $e0, $e0     // I TR
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // L TR
+    .byte $2a, $2e, $ae, $be, $be, $ee, $ee, $ae     // M TR
+    .byte $2a, $2e, $2e, $2e, $ae, $ae, $ae, $ee     // N TR
+    .byte $a8, $f8, $fa, $ae, $2e, $2e, $2e, $2e     // O TR
+    .byte $a8, $f8, $fa, $ae, $ae, $fa, $f8, $e8     // R TR
+    .byte $aa, $fe, $fe, $aa, $a8, $f8, $fa, $ae     // S TR
+    .byte $2a, $2e, $2e, $2e, $2e, $2e, $2e, $2e     // U TR
+    .byte $2a, $2e, $2e, $2e, $2e, $2e, $ae, $ba     // V TR
+    .byte $2a, $2e, $ae, $ba, $b8, $e8, $e0, $a0     // Y TR
+    .byte $0b, $0a, $0a, $0b, $0b, $0a, $00, $00     // ! BL
+    .byte $bf, $ba, $b8, $b8, $b8, $a8, $00, $00     // A BL
+    .byte $b8, $b8, $ba, $bf, $bf, $aa, $00, $00     // D BL
+    .byte $b8, $b8, $ba, $bf, $bf, $aa, $00, $00     // E BL
+    .byte $b8, $b8, $b8, $b8, $b8, $a8, $00, $00     // F BL
+    .byte $b8, $b8, $ba, $af, $2f, $2a, $00, $00     // G BL
+    .byte $0b, $0b, $ab, $bf, $bf, $aa, $00, $00     // I BL
+    .byte $b8, $b8, $ba, $bf, $bf, $aa, $00, $00     // L BL
+    .byte $b8, $b8, $b8, $b8, $b8, $a8, $00, $00     // M BL
+    .byte $ba, $ba, $b8, $b8, $b8, $a8, $00, $00     // N BL
+    .byte $b8, $b8, $ba, $af, $2f, $2a, $00, $00     // O BL
+    .byte $bb, $ba, $ba, $ba, $b8, $a8, $00, $00     // R BL
+    .byte $00, $00, $aa, $bf, $bf, $aa, $00, $00     // S BL
+    .byte $b8, $b8, $ba, $af, $2f, $2a, $00, $00     // U BL
+    .byte $2e, $2e, $2e, $2b, $0b, $0a, $00, $00     // V BL
+    .byte $0b, $0b, $0b, $0b, $0b, $0a, $00, $00     // Y BL
+    .byte $e0, $a0, $a0, $e0, $e0, $a0, $00, $00     // ! BR
+    .byte $fe, $ae, $2e, $2e, $2e, $2a, $00, $00     // A BR
+    .byte $2e, $2e, $ae, $fa, $f8, $a8, $00, $00     // D BR
+    .byte $00, $00, $aa, $fe, $fe, $aa, $00, $00     // E BR
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // F BR
+    .byte $2e, $2e, $ae, $fa, $f8, $a8, $00, $00     // G BR
+    .byte $e0, $e0, $ea, $fe, $fe, $aa, $00, $00     // I BR
+    .byte $00, $00, $aa, $fe, $fe, $aa, $00, $00     // L BR
+    .byte $2e, $2e, $2e, $2e, $2e, $2a, $00, $00     // M BR
+    .byte $ee, $be, $be, $ae, $2e, $2a, $00, $00     // N BR
+    .byte $2e, $2e, $ae, $fa, $f8, $a8, $00, $00     // O BR
+    .byte $e8, $f8, $fa, $ae, $2e, $2a, $00, $00     // R BR
+    .byte $2e, $2e, $ae, $fa, $f8, $a8, $00, $00     // S BR
+    .byte $2e, $2e, $ae, $fa, $f8, $a8, $00, $00     // U BR
+    .byte $b8, $b8, $b8, $e8, $e0, $a0, $00, $00     // V BR
+    .byte $80, $80, $80, $80, $80, $80, $00, $00     // Y BR
+
+big_map:                               // letter A-Z (index 1-26) -> glyph n
+    .byte 0, 1, 0, 0, 2, 3, 4, 5, 0, 6, 0, 0, 7, 8, 9, 10, 0, 0, 11, 12, 0, 13, 14, 0, 0, 15, 0
+
 custom_glyphs:
     .byte $a9, $a9, $a9, $a9, $a9, $a9, $a9, $a9     // wood plank
     .byte $a6, $a6, $a6, $a6, $a6, $a6, $a6, $a6     // wood plank, grain elsewhere
@@ -3141,6 +3225,87 @@ print_done:
     rts
 
 // ----------------------------------------------------------------------------
+//  print_big: like print_text, but each letter is a 2x2 cell multicolour glyph (yellow
+//  fill, brown outline) - only A D E F G I L M N O R S U V Y and !; a space is two blank
+//  cells. The text address is the top-left cell; a line is two screen rows tall.
+// ----------------------------------------------------------------------------
+print_big:
+    sta ptr_src
+    stx ptr_src+1
+    ldy #0
+    lda (ptr_src),y
+    sta ptr_dst
+    sta ptr_col
+    iny
+    lda (ptr_src),y
+    sta ptr_dst+1
+    clc
+    adc #>(COLOR_RAM - SCREEN)
+    sta ptr_col+1
+    clc
+    lda ptr_src
+    adc #2
+    sta ptr_src
+    bcc pb_go
+    inc ptr_src+1
+pb_go:
+    lda #0
+    sta pb_i
+    tay                                // Y = destination column
+pb_loop:
+    sty pb_d
+    ldy pb_i
+    lda (ptr_src),y                    // next letter
+    inc pb_i
+    ldy pb_d
+    cmp #$ff
+    beq pb_done
+    cmp #$20
+    beq pb_space
+    cmp #$21                           // '!' is glyph 0
+    beq pb_bang
+    tax
+    lda big_map,x
+    jmp pb_letter
+pb_bang:
+    lda #0
+pb_letter:
+    sta pb_c
+    ora #$40                           // top-left
+    jsr pb_put
+    iny
+    lda pb_c
+    ora #$50                           // top-right
+    jsr pb_put
+    tya
+    clc
+    adc #39                            // next row, same cell as the top-right + 40 - 1
+    tay
+    lda pb_c
+    ora #$60                           // bottom-left
+    jsr pb_put
+    iny
+    lda pb_c
+    ora #$70                           // bottom-right
+    jsr pb_put
+    tya
+    sec
+    sbc #39
+    tay
+    jmp pb_loop
+pb_space:
+    iny
+    iny
+    jmp pb_loop
+pb_put:
+    sta (ptr_dst),y
+    lda #COL_BIG
+    sta (ptr_col),y
+    rts
+pb_done:
+    rts
+
+// ----------------------------------------------------------------------------
 //  5x7 digit font, 8 bytes per glyph (digits 0-9, then 10 = blank)
 // ----------------------------------------------------------------------------
 font_rows:
@@ -3162,7 +3327,7 @@ font_rows:
 .encoding "screencode_upper"
 
 txt_title:
-    .word SCREEN + 4*40 + 16
+    .word SCREEN + 3*40 + 12
     .text "NOSEDIVE"
     .byte $ff
 txt_help1:
@@ -3182,15 +3347,19 @@ txt_start:
     .text "PRESS FIRE TO START"
     .byte $ff
 txt_landed:
-    .word SCREEN + 5*40 + 11
-    .text "YOU LANDED SAFELY!"
+    .word SCREEN + 1*40 + 10
+    .text "YOU LANDED"
+    .byte $ff
+txt_landed2:
+    .word SCREEN + 3*40 + 13
+    .text "SAFELY!"
     .byte $ff
 txt_again:
     .word SCREEN + 7*40 + 8
     .text "PRESS FIRE TO PLAY AGAIN"
     .byte $ff
 txt_crashed:
-    .word SCREEN + 5*40 + 15
+    .word SCREEN + 3*40 + 11
     .text "GAME OVER"
     .byte $ff
 txt_retry:
@@ -3250,6 +3419,9 @@ spike_stage:    .byte 0                // rows of the cluster still to place (3,
 spike_c:        .byte 0
 spike_mask:     .byte SPIKE_MASK
 intro:          .byte 0                // 1 during the opening run
+pb_i:           .byte 0
+pb_d:           .byte 0
+pb_c:           .byte 0
 yscroll:        .byte 0                // current vertical fine scroll, 0-7
 anim_timer:     .byte 0
 anim_index:     .byte 0
