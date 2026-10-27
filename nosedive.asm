@@ -176,6 +176,8 @@
 .const CH_LEDGE       = $c7            // floating ledge
 .const CH_BRICK       = $c8            // wall bricks
 .const CH_ANVIL       = $c9            // anvil pick-up
+.const CH_COIN        = $ca            // coin on top of a ledge
+.const COIN_POINTS    = $20            // BCD: 20 points
 .const ROW_LAST       = SCREEN + 24*40 // the row new ledges are built on
 
 .const COL_BORDER     = 14             // light blue
@@ -311,11 +313,12 @@ crash_far:
     jmp crashed
 
 still_flying:
-    jsr move_diver
     jsr diver_physics                  // carry set = carried off the top of the screen
     bcc physics_ok
     jmp crashed
 physics_ok:
+    jsr move_diver                     // (sideways, stopped by the sides of ledges)
+    jsr collect_coins
     jsr animate_diver
     jsr animate_water
     jsr update_timer
@@ -732,6 +735,10 @@ update_sprite_x:
 //  move_diver: joystick left/right moves the diver, clamped to the screen
 // ----------------------------------------------------------------------------
 move_diver:
+    lda player_x_lo
+    sta x_old_lo
+    lda player_x_hi
+    sta x_old_hi
     lda #MOVE_SPEED                    // walking on a ledge is slower than diving sideways
     ldx on_ledge
     beq mv_speed_ok
@@ -783,7 +790,138 @@ check_right:
     sta player_x_lo
 
 move_done:
+    jsr side_check                     // did he walk into the side of a ledge?
+    bcc md_ok
+    lda x_old_lo                       // then he doesn't move
+    sta player_x_lo
+    lda x_old_hi
+    sta player_x_hi
+    lda #0
+    sta moving
+md_ok:
     jmp update_sprite_x
+
+// side_check: carry set if the diver (at his new X and this frame's Y) overlaps a ledge
+// character, other than the one he is landing on from above (which diver_physics handles).
+side_check:
+    lda #18
+    jsr x_to_col
+    sta c_lo
+    lda #7
+    jsr x_to_col
+    sta c_hi
+    lda diver_y
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta dp_row
+    lda diver_y
+    clc
+    adc #20
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta dp_last
+sc_loop:
+    ldx dp_row
+    cpx #25
+    bcs sc_free
+    lda dp_row
+    cmp dp_last
+    bne sc_scan
+    lda dp_row                         // the foot row: ignore it if he is coming down on it
+    asl
+    asl
+    asl
+    clc
+    adc lbase
+    clc
+    adc speed
+    sta tmpv
+    lda y_prev
+    clc
+    adc #20
+    cmp tmpv
+    bcc sc_next
+sc_scan:
+    ldx dp_row
+    jsr scan_row
+    bcs sc_blocked
+sc_next:
+    inc dp_row
+    lda dp_row
+    cmp dp_last
+    beq sc_loop
+    bcc sc_loop
+sc_free:
+    clc
+    rts
+sc_blocked:
+    sec
+    rts
+
+// collect_coins: any coin character under the diver is picked up for COIN_POINTS
+collect_coins:
+    lda #24
+    jsr x_to_col
+    sta cc_c0
+    lda #1
+    jsr x_to_col
+    sta cc_c1
+    lda diver_y
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta cc_row
+    lda diver_y
+    clc
+    adc #20
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta cc_last
+cc_rows:
+    ldx cc_row
+    cpx #25
+    bcs cc_done
+    lda row_lo,x
+    sta ptr_dst
+    lda row_hi,x
+    sta ptr_dst+1
+    ldy cc_c0
+cc_cell:
+    lda (ptr_dst),y
+    cmp #CH_COIN
+    bne cc_next
+    lda #CH_SPACE
+    sta (ptr_dst),y
+    tya
+    pha
+    lda #COIN_POINTS
+    ldx #0
+    jsr add_score
+    pla
+    tay
+cc_next:
+    iny
+    cpy cc_c1
+    beq cc_cell
+    bcc cc_cell
+    inc cc_row
+    lda cc_row
+    cmp cc_last
+    beq cc_rows
+    bcc cc_rows
+cc_done:
+    rts
 
 // ----------------------------------------------------------------------------
 //  animate_diver: cycle through the diver frames 0,1,2,1 to suggest the arms
@@ -851,6 +989,8 @@ walk_seq:
 //  Returns carry set if dead.
 // ----------------------------------------------------------------------------
 diver_physics:
+    lda diver_y
+    sta y_prev
     lda yscroll                        // lbase: screen line of row 0 next frame
     clc
     adc #48
@@ -874,32 +1014,32 @@ diver_physics:
     lda #PLAYER_Y
 dp_fall_ok:
     sta tmpv2                          // where he would be
-    sec                                // first and last text row his body overlaps
-    sbc lbase
-    lsr
-    lsr
-    lsr
-    sta dp_row
-    lda tmpv2
-    clc
+    clc                                // the text row his feet would be in
     adc #20
     sec
     sbc lbase
     lsr
     lsr
     lsr
-    sta dp_last
-dp_scan:
-    ldx dp_row
-    cpx #25
+    sta dp_row
+    cmp #25
     bcs dp_clear
+    asl                                // landing needs his feet to have been above that row's
+    asl                                // top last frame (the shaft moves up `speed`): falling
+    asl                                // onto it, not walking into its side
+    clc
+    adc lbase
+    clc
+    adc speed
+    sta tmpv
+    lda y_prev
+    clc
+    adc #20
+    cmp tmpv
+    bcs dp_clear
+    ldx dp_row
     jsr scan_row
     bcs dp_land
-    inc dp_row
-    lda dp_row
-    cmp dp_last
-    beq dp_scan
-    bcc dp_scan
 dp_clear:
     lda tmpv2                          // nothing in the way
     sta diver_y
@@ -1244,6 +1384,10 @@ pail_b:     .byte 31, 31, 32, 31, 31, 30, 30, 30, 29, 29, 28, 28, 28, 27, 39
 // The first gap row after a ledge plans the next ledge; ANVIL_AHEAD rows above that
 // ledge the planned anvil is put in.
 maybe_anvil:
+    lda ledge_wait                     // the row just above a ledge row: coins on the ledge
+    bne ma_nocoins
+    jsr place_coins
+ma_nocoins:
     lda after_ledge
     beq ma_place
     lda #0
@@ -1295,6 +1439,30 @@ ma_no:
 
 anv_when:
     .byte ANVIL_AHEAD + 4, ANVIL_AHEAD + 2, ANVIL_AHEAD   // blank rows left below each
+
+// place_coins: a coin above every other character of the planned ledge row
+place_coins:
+    lda plan_ok
+    beq pc_done
+    ldx plan_s1
+    ldy plan_n1
+    jsr coin_seg
+    ldx plan_s2
+    ldy plan_n2
+coin_seg:
+    cpy #0
+    beq pc_done
+cs_loop:
+    lda #CH_COIN
+    sta row_buf,x
+    inx
+    inx
+    dey
+    dey
+    beq pc_done
+    bpl cs_loop
+pc_done:
+    rts
 
 // plan_ledge: choose the next ledge row now (pick, check reach, retry), so it is known
 // while the gap rows are built. plan_ok = 0 if nothing fair was found.
@@ -2653,7 +2821,7 @@ sc_solid:
     sta CHARSET + CH_SOLID*8,x
     dex
     bpl sc_solid
-    ldx #(10*8 - 1)
+    ldx #(11*8 - 1)
 sc_custom:
     lda custom_glyphs,x
     sta CHARSET + CH_WOOD_A*8,x
@@ -2672,6 +2840,7 @@ custom_glyphs:
     .byte $55, $aa, $aa, $aa, $aa, $aa, $aa, $55     // floating ledge (light edges)
     .byte $55, $fd, $fd, $fd, $55, $df, $df, $df     // brick wall: red bricks, orange mortar
     .byte $55, $55, $3f, $0f, $0f, $3f, $ff, $ff     // anvil: grey top face (%01), black body (%11)
+    .byte $00, $00, $14, $69, $69, $69, $69, $14     // coin: grey rim (%01), brown face (%10)
 
 // ----------------------------------------------------------------------------
 //  get_random: A = random byte (SID voice 3 noise)
@@ -2817,6 +2986,13 @@ c_lo:           .byte 0                // text columns under the middle of the d
 c_hi:           .byte 0
 dp_row:         .byte 0
 dp_last:        .byte 0
+y_prev:         .byte 0                // diver's Y at the start of this frame
+x_old_lo:       .byte 0
+x_old_hi:       .byte 0
+cc_c0:          .byte 0
+cc_c1:          .byte 0
+cc_row:         .byte 0
+cc_last:        .byte 0
 yscroll:        .byte 0                // current vertical fine scroll, 0-7
 anim_timer:     .byte 0
 anim_index:     .byte 0

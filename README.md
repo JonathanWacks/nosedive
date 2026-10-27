@@ -7,12 +7,12 @@ alleyway with brick walls, and ledges stick out of the walls or hang in mid-air 
 (and the occasional bird, which is fatal). **Ledges aren't fatal, but they are a trap:** if one
 reaches your feet you land on it, and the shaft keeps scrolling at the same speed, carrying you
 up the screen with it. You can walk left and right along it (slower than diving sideways); walk
-off the end and you dive again, dropping back to your normal height. Get carried off the top of
+off the end and you dive again. The sides of a ledge are solid: fall or walk into one and you're simply stopped, you don't get put on top. A coin sits on top of every other ledge character; walk over one to collect it, dropping back to your normal height. Get carried off the top of
 the screen and it's game over, so keep diving.
 Reach the bottom and dive into a big wooden pail of water to win. Miss the pail or clip its rim and it's game over. A counter in the bottom right corner shows how many
 rows are left until the water (about 376 at the start). It counts rows, not seconds, so anvils make it fall faster.
 
-**Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
+**Score** (bottom left): 10 points every second, 200 for each balloon you touch, 20 for each coin, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
 random column. Fly into one to pop it. A **bird** flaps across the shaft every 10-17 seconds;
 flying into it is fatal. **Anvils** (small black blocks with a grey top) are planted where they're hard to dodge: a ledge row is planned a few rows early, and if it leaves only one lane to pass through, a cluster of three anvils goes in that lane, the last two blank rows above the ledge: first in the column the diver is heading for, then the far side of the lane, then the first column again, two rows apart so dodging one means weaving into the next (always for a narrow lane, sometimes for a wide one; picking up several still only adds one step each, up to 3); touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
@@ -65,7 +65,8 @@ Joystick in **port 2**: left and right steer the diver (or walk him along a ledg
   the +10 score, balloons and birds.
 - **The diver** is hardware sprite 0, held in the middle of the screen, with three animation
   frames played as 0, 1, 2, 1. It moves sideways only.
-- **Ledges and landing.** `diver_physics` runs before each scroll step and works out where the shaft will be next frame (`lbase`). Diving, the diver drifts back to `PLAYER_Y`; if a ledge character lies under the middle of his sprite he is snapped to stand on its top and `on_ledge` is set. While standing his Y falls by the scroll speed each frame; if there's no ledge under his feet any more he is diving again, and if his Y goes above `DIVE_TOP_Y` he is dead. Walking uses three frames (stand, two strides) per direction.
+- **Coins** are a character drawn in the blank row just above each planned ledge row, over every other ledge column. Picking them up is done in software each frame (`collect_coins`) by looking at the cells under the diver, since their grey/brown pixels aren't a reliable collision source.
+- **Ledges and landing.** `diver_physics` runs before each scroll step and works out where the shaft will be next frame (`lbase`). Diving, the diver drifts back to `PLAYER_Y`; if a ledge character lies under the middle of his sprite *and his feet were above that row's top last frame* (so he came down on it, not into its side) he is snapped to stand on its top and `on_ledge` is set. Sideways movement is then checked by `side_check` against any ledge characters his body overlaps, and cancelled if it would put him inside one. While standing his Y falls by the scroll speed each frame; if there's no ledge under his feet any more he is diving again, and if his Y goes above `DIVE_TOP_Y` he is dead. Walking uses three frames (stand, two strides) per direction.
 - **Anvils, the pail and walls** use the VIC sprite-to-background collision register, so it matches exactly
   what you see.
 - **The pail.** The screen uses multicolour text with a RAM copy of the character set, plus a few
@@ -95,6 +96,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `DISPLAY_OFFSET` | 11 | added to the level's row count to give the HUD counter's start value (it reaches 0 at the water) |
 | `FLOAT_MASK` | 1 | a single ledge floats free when (random AND mask) is 0 (one in two); otherwise it is wall-mounted |
 | `FALL_SPEED` / `WALK_SPEED` / `WALK_ANIM_DELAY` | 3 / 2 / 5 | pixels per frame he drops back to `PLAYER_Y`, pixels per frame he walks on a ledge, frames per walking step |
+| `COIN_POINTS` | $20 | BCD points per coin |
 | `DIVE_TOP_Y` | 56 | sprite Y above which he is off the top of the screen |
 | `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |
 | `SPLASH_FRAMES` / `SINK_FRAMES` | 100 / 30 | length of the splash scene / frames the shaft keeps scrolling while the diver sinks |
