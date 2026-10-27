@@ -14,7 +14,7 @@ rows are left until the water (about 376 at the start). It counts rows, not seco
 
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, 20 for each coin, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 1-4 seconds at a
-random column. Fly into one to pop it. One in four is **black**: popping it scores nothing and speeds the fall up by one step (up to `SPEED_MAX`, 3), as anvils do. A **bird** flaps across the shaft every 10-17 seconds;
+random column. Fly into one to pop it. One in four is **black**: popping it scores nothing and speeds the fall up by one step (up to `SPEED_MAX`, 3), as anvils do. **Spiked balls** (a plus-shaped cluster of five, 1-3-1 rows) appear in about one gap in four; touching one is fatal, so steer round them. A **bird** flaps across the shaft every 10-17 seconds;
 flying into it is fatal. **Anvils** (currently switched off with `ANVILS_ON = 0`; black balloons took over their job) (small black blocks with a grey top) are planted where they're hard to dodge: a ledge row is planned a few rows early, and if it leaves only one lane to pass through, a cluster of three anvils goes in that lane, the last two blank rows above the ledge: first in the column the diver is heading for, then the far side of the lane, then the first column again, two rows apart so dodging one means weaving into the next (always for a narrow lane, sometimes for a wide one; picking up several still only adds one step each, up to 3); touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
 
 ## Build and run
@@ -97,6 +97,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `FLOAT_MASK` | 1 | a single ledge floats free when (random AND mask) is 0 (one in two); otherwise it is wall-mounted |
 | `FALL_SPEED` / `WALK_SPEED` / `WALK_ANIM_DELAY` | 3 / 2 / 5 | pixels per frame he drops back to `PLAYER_Y`, pixels per frame he walks on a ledge, frames per walking step |
 | `COIN_POINTS` | $20 | BCD points per coin |
+| `SPIKE_MASK` / `SPIKE_START_W` | 3 / 6 | a gap gets a spiked-ball cluster when `random AND mask` is 0 (1 in 4); it starts `SPIKE_START_W` rows above the next ledge. Checked in software by `check_spikes` |
 | `DIVE_TOP_Y` | 56 | sprite Y above which he is off the top of the screen |
 | `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |
 | `SPLASH_FRAMES` / `SINK_FRAMES` | 100 / 30 | length of the splash scene / frames the shaft keeps scrolling while the diver sinks |

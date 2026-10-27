@@ -179,6 +179,9 @@
 .const CH_ANVIL       = $c9            // anvil pick-up
 .const CH_COIN        = $ca            // coin on top of a ledge
 .const COIN_POINTS    = $20            // BCD: 20 points
+.const CH_SPIKE       = $cb            // spiked ball: deadly
+.const SPIKE_MASK     = 3              // a gap between ledges gets a spiked-ball cluster when (random AND mask) is 0: 1 in 4
+.const SPIKE_START_W  = 6              // blank rows left below the cluster's first row
 .const ROW_LAST       = SCREEN + 24*40 // the row new ledges are built on
 
 .const COL_BORDER     = 14             // light blue
@@ -319,6 +322,10 @@ still_flying:
     jmp crashed
 physics_ok:
     jsr move_diver                     // (sideways, stopped by the sides of ledges)
+    jsr check_spikes                   // carry set = touching a spiked ball
+    bcc spikes_ok
+    jmp crashed
+spikes_ok:
     jsr collect_coins
     jsr animate_diver
     jsr animate_water
@@ -636,6 +643,8 @@ ig_anv:
     sta anv_plan,x
     dex
     bpl ig_anv
+    lda #0
+    sta spike_stage
     lda #1
     sta after_ledge                    // the first gap row plans the first ledge
     lda #0
@@ -869,6 +878,59 @@ sc_free:
     clc
     rts
 sc_blocked:
+    sec
+    rts
+
+// check_spikes: carry set if a spiked ball character overlaps the middle of the diver
+check_spikes:
+    lda #18
+    jsr x_to_col
+    sta c_lo
+    lda #7
+    jsr x_to_col
+    sta c_hi
+    lda diver_y
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta dp_row
+    lda diver_y
+    clc
+    adc #20
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta dp_last
+sp_loop:
+    ldx dp_row
+    cpx #25
+    bcs sp_none
+    lda row_lo,x
+    sta ptr_dst
+    lda row_hi,x
+    sta ptr_dst+1
+    ldy c_lo
+sp_cell:
+    lda (ptr_dst),y
+    cmp #CH_SPIKE
+    beq sp_hit
+    iny
+    cpy c_hi
+    beq sp_cell
+    bcc sp_cell
+    inc dp_row
+    lda dp_row
+    cmp dp_last
+    beq sp_loop
+    bcc sp_loop
+sp_none:
+    clc
+    rts
+sp_hit:
     sec
     rts
 
@@ -1403,6 +1465,7 @@ pail_b:     .byte 31, 31, 32, 31, 31, 30, 30, 30, 29, 29, 28, 28, 28, 27, 39
 // The first gap row after a ledge plans the next ledge; ANVIL_AHEAD rows above that
 // ledge the planned anvil is put in.
 maybe_anvil:
+    jsr place_spikes
     lda ledge_wait                     // the row just above a ledge row: coins on the ledge
     bne ma_nocoins
     jsr place_coins
@@ -1458,6 +1521,49 @@ ma_no:
 
 anv_when:
     .byte ANVIL_AHEAD + 4, ANVIL_AHEAD + 2, ANVIL_AHEAD   // blank rows left below each
+
+// place_spikes: now and then a plus-shaped cluster of five spiked balls (1, 3, 1 across
+// three consecutive gap rows) at a random column
+place_spikes:
+    lda spike_stage
+    bne pk_go
+    lda ledge_wait
+    cmp #SPIKE_START_W
+    bne pk_ret
+    lda rows_hi                        // not near the end of the level
+    bne pk_far
+    lda rows_lo
+    cmp #ANVIL_MARGIN
+    bcc pk_ret
+pk_far:
+    jsr get_random
+    and spike_mask
+    bne pk_ret
+    jsr get_random
+    and #31
+    clc
+    adc #PF_L
+    sta spike_c                        // left column of the middle row: 3..34
+    lda #3
+    sta spike_stage
+pk_go:
+    ldx spike_c
+    inx                                // middle column
+    lda #CH_SPIKE
+    ldy spike_stage
+    cpy #2
+    bne pk_put
+    dex                                // the wide row
+    sta row_buf,x
+    inx
+    inx
+    sta row_buf,x
+    dex
+pk_put:
+    sta row_buf,x
+    dec spike_stage
+pk_ret:
+    rts
 
 // place_coins: a coin above every other character of the planned ledge row
 place_coins:
@@ -2859,7 +2965,7 @@ sc_solid:
     sta CHARSET + CH_SOLID*8,x
     dex
     bpl sc_solid
-    ldx #(11*8 - 1)
+    ldx #(12*8 - 1)
 sc_custom:
     lda custom_glyphs,x
     sta CHARSET + CH_WOOD_A*8,x
@@ -2879,6 +2985,7 @@ custom_glyphs:
     .byte $55, $fd, $fd, $fd, $55, $df, $df, $df     // brick wall: red bricks, orange mortar
     .byte $55, $55, $3f, $0f, $0f, $3f, $ff, $ff     // anvil: grey top face (%01), black body (%11)
     .byte $00, $00, $14, $69, $69, $69, $69, $14     // coin: grey rim (%01), brown face (%10)
+    .byte $41, $14, $69, $28, $28, $69, $14, $41     // spiked ball: grey spikes (%01), brown core (%10)
 
 // ----------------------------------------------------------------------------
 //  get_random: A = random byte (SID voice 3 noise)
@@ -3032,6 +3139,9 @@ cc_c0:          .byte 0
 cc_c1:          .byte 0
 cc_row:         .byte 0
 cc_last:        .byte 0
+spike_stage:    .byte 0                // rows of the cluster still to place (3, 2, 1)
+spike_c:        .byte 0
+spike_mask:     .byte SPIKE_MASK
 yscroll:        .byte 0                // current vertical fine scroll, 0-7
 anim_timer:     .byte 0
 anim_index:     .byte 0
