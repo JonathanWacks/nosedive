@@ -446,10 +446,16 @@ ta_none:
 
 // speed_up: one pixel per frame faster (up to SPEED_MAX); ledges get further apart to match
 speed_up:
-    lda speed
-    cmp #SPEED_MAX
+    lda speed_req                      // (takes effect at the start of next frame, so the
+    cmp #SPEED_MAX                     // diver and the shaft never disagree mid-frame)
     bcs su_done
-    inc speed
+    inc speed_req
+    rts
+apply_speed:
+    lda speed_req
+    cmp speed
+    beq su_done
+    sta speed
 set_reach:
     ldx speed
     lda reach_tab,x
@@ -635,8 +641,9 @@ ig_anv:
     lda #0
     sta wall_side
     sta plan_ok
-    lda #SCROLL_SPEED                  // anvils change this during a run
+    lda #SCROLL_SPEED                  // black balloons change this during a run
     sta speed
+    sta speed_req
     jsr set_reach
     lda #1                             // before the first ledge anything is reachable
     sta pi_n
@@ -990,6 +997,7 @@ walk_seq:
 //  Returns carry set if dead.
 // ----------------------------------------------------------------------------
 diver_physics:
+    jsr apply_speed                    // a speed-up asked for last frame
     lda diver_y
     sta y_prev
     lda yscroll                        // lbase: screen line of row 0 next frame
@@ -1082,7 +1090,17 @@ dp_alive:
     cpx #25
     bcs dp_off
     jsr scan_row
-    bcs dp_still
+    bcc dp_off
+    txa                                // supported: stand exactly on that row's top
+    asl
+    asl
+    asl
+    clc
+    adc lbase
+    sec
+    sbc #21
+    sta tmpv2
+    jmp dp_still
 dp_off:
     lda #0                             // walked off the end: dive again
     sta on_ledge
@@ -2969,6 +2987,7 @@ txt_retry:
 // ----------------------------------------------------------------------------
 //  Variables
 // ----------------------------------------------------------------------------
+speed_req:      .byte SCROLL_SPEED     // speed to switch to at the start of the next frame
 speed:          .byte SCROLL_SPEED     // pixels per frame the shaft scrolls now
 reach_p1:       .byte REACH1 + 1       // REACH + 1
 anv_col:        .byte $ff, $ff, $ff    // columns of the cluster's anvils on screen ($ff = none)
