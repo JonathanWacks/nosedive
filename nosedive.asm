@@ -103,11 +103,13 @@
 .const MIN_FREE       = 5              // a gap must be at least this many columns
 .const LEDGE_GAP_MIN  = 10             // blank rows between ledges at the starting speed: 10-13
 .const SPEED_MAX       = 3              // anvils speed the fall up to this many pixels per frame
-// how far (columns) the diver can get between ledge rows at the starting speed. Faster
-// falls get proportionally more blank rows between ledges, so this stays the same.
+// how far (columns) the diver can get between ledge rows at each speed. The rows between
+// ledges stay the same, so a faster fall leaves less time and the ledges get harder to
+// avoid; REACH_SLACK is how much of that the player is expected to make up by looking ahead.
+.const REACH_SLACK    = 3
 .const REACH1         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 1 * MOVE_SPEED / 8) - 2
-.const GAP_S2         = floor(((REACH1 + 2) * 8 * 2 / MOVE_SPEED + 29 + 8) / 8) - 1
-.const GAP_S3         = floor(((REACH1 + 2) * 8 * 3 / MOVE_SPEED + 29 + 8) / 8) - 1
+.const REACH2         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 2 * MOVE_SPEED / 8) - 2 + REACH_SLACK
+.const REACH3         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 3 * MOVE_SPEED / 8) - 2 + REACH_SLACK
 .const ANVIL_CELL     = 8 + 0          // black cell colour for the anvil's column (multicolour %11)
 .const ANVIL_MARGIN   = 40             // no anvils this close to the pail (its water is %11 too)
 .const ANVIL_MASK     = 7              // a ledge with a wide lane gets an anvil 1 time in (mask+1); narrow lanes always do
@@ -412,13 +414,13 @@ speed_up:
     inc speed
 set_reach:
     ldx speed
-    lda gap_tab,x
-    sta gap_min
+    lda reach_tab,x
+    sta reach_p1
 su_done:
     rts
 
-gap_tab:
-    .byte 0, LEDGE_GAP_MIN, GAP_S2, GAP_S3
+reach_tab:
+    .byte 0, REACH1 + 1, REACH2 + 1, REACH3 + 1
 
 // x_to_col: A = pixels to subtract from the diver's X; returns the text column in A
 x_to_col:
@@ -1185,7 +1187,7 @@ row_ledge:
     jsr get_random                     // blank rows before the next ledge row
     and #3
     clc
-    adc gap_min
+    adc #LEDGE_GAP_MIN
     sta ledge_wait
     lda plan_ok                        // draw the ledge planned in the gap
     bne rl_draw
@@ -1296,6 +1298,16 @@ ps_start:
     and #7                             // always cross to the other side before the next one ...
     clc
     adc #LEDGE_MIN_LEN
+    cmp reach_p1                       // (REACH + 1 is the limit, and it shrinks as the fall speeds up)
+    bcc ps_len_ok
+    jsr get_random
+    and #3
+    sta tmpv
+    lda reach_p1
+    sec
+    sbc #2
+    sbc tmpv
+ps_len_ok:
     sta seg1_n
     lda wall_side                      // ... and usually on the opposite wall to the last one
     sta cand_side
@@ -2475,7 +2487,6 @@ txt_retry:
 // ----------------------------------------------------------------------------
 speed:          .byte SCROLL_SPEED     // pixels per frame the shaft scrolls now
 reach_p1:       .byte REACH1 + 1       // REACH + 1
-gap_min:        .byte LEDGE_GAP_MIN    // blank rows between ledges at the current speed
 anv_col:        .byte $ff              // column of the anvil on screen ($ff = none)
 anv_age:        .byte 0                // shifts since it arrived
 wall_side:      .byte 0                // side of the last wall ledge: 0 = left, 1 = right

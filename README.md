@@ -35,7 +35,7 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   every character uses the same colour.
 - **Brick walls.** The outer `WALL_W` (3) columns on each side are a red brick character, set once
   in colour RAM; every new row is built with bricks at both ends.
-- **Ledges.** Each new bottom row is either blank or a ledge row, one every 11-14 rows at the starting speed (further apart after an anvil, so the diver always has the same time to react). Three kinds:
+- **Ledges.** Each new bottom row is either blank or a ledge row, one every 11-14 rows, whatever the speed. Three kinds:
   **wall ledges** (3 in 4 of the single ledges): 12-19 columns, flush with a wall, usually on the
   opposite wall to the previous wall ledge so the free side keeps changing; **floating ledges**
   of 12-20 columns; and (one row in four proposed) a **double**, one ledge from each wall leaving
@@ -94,7 +94,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
 | `DOUBLE_MASK` | 3 | 1 ledge row in (mask+1) has ledges on both walls |
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
-| `REACH1` | derived (20) | how far, in columns, the diver can move between ledge rows at the starting speed; computed from `LEDGE_GAP_MIN` and `MOVE_SPEED`. `GAP_S2` / `GAP_S3` (18 / 25) are the blank rows needed between ledges at speeds 2 and 3 to keep the same reach |
+| `REACH1`-`REACH3` | derived (20, 9+3, 5+3) | how far, in columns, the diver can move between ledge rows at each speed, from `LEDGE_GAP_MIN` and `MOVE_SPEED`. `REACH_SLACK` (3) is added at speeds 2 and 3 on the assumption that the player looks ahead. Wall ledges are never longer than the current reach, so they shrink as an anvil speeds you up |
 | `WALL_W` | 3 | width of the brick walls in columns |
 | `LEDGE_MIN_LEN` | 12 | shortest ledge in columns (floating: up to 20; wall-mounted: up to 19, within `REACH`) |
 | `MIN_FREE` | 5 | narrowest open space that counts as passable |
@@ -111,7 +111,7 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | `BALLOON_POINTS_HI` | 2 | balloon score in hundreds (200) |
 | `LAND_BONUS_HI` | $10 | landing bonus in BCD hundreds (1000) |
 
-The gap between ledges is looked up by the current scroll speed (`gap_tab`), so `REACH` stays the same however fast the fall. If you change `SCROLL_SPEED` or `SPEED_MAX`, extend that table.
+Ledge spacing doesn't change with speed, so an anvil gives the diver less time for the same layout. The fairness check uses a smaller `REACH` at higher speeds (`reach_tab`); if you change `SCROLL_SPEED` or `SPEED_MAX`, extend that table.
 
 ## Memory map
 
