@@ -133,5 +133,5 @@ Ledge spacing doesn't change with speed, so an anvil gives the diver less time f
 | `$0400` | screen RAM (the game scrolls this) |
 | `$0801` | BASIC loader, then the program |
 | `$2000` | sprite data: diver frames, balloon frames, score and time sprites, splash droplet, bird frames (outside `$1000-$1fff`, where the VIC sees ROM) |
-| `$2800` | character set: ROM copy plus the ledge, brick and pail characters, built at startup |
+| `$2800` | character set: our own rounded "comic" text font (`font_data`, screen codes $00-$3f: A-Z, digits and ! . , : / - ? '), plus the ledge, brick and pail characters, built at startup. The ROM set is no longer used |
 | `$d800` | colour RAM, set once |

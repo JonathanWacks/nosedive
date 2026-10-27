@@ -2970,39 +2970,34 @@ wave_data:
     .byte $00, $0c, $33, $ff, $ff, $ff, $ff, $ff
 
 // ----------------------------------------------------------------------------
-//  setup_charset: copy the ROM characters to RAM (so text still works), then
-//  redefine the ledge/floor block and add the pail characters. These are
+//  setup_charset: build the RAM character set: our own text font (the ROM set is not
+//  used at all), then the ledge/floor block and the pail characters. These are
 //  multicolour characters: each 2-pixel pair is %00 background, %01 orange,
 //  %10 brown or %11 the cell colour (water). Pairs %10 and %11 count as
 //  solid for sprite collisions and hide sprites that are set behind them.
 // ----------------------------------------------------------------------------
 setup_charset:
-    lda CPU_PORT
-    and #%11111011                     // character ROM visible at $d000
-    sta CPU_PORT
-    ldx #0
-sc_copy:
-    lda $d000,x
+    lda #0                             // blank the whole set first
+    tax
+sc_clear:
     sta CHARSET,x
-    lda $d100,x
     sta CHARSET+$100,x
-    lda $d200,x
     sta CHARSET+$200,x
-    lda $d300,x
     sta CHARSET+$300,x
-    lda $d400,x
     sta CHARSET+$400,x
-    lda $d500,x
     sta CHARSET+$500,x
-    lda $d600,x
     sta CHARSET+$600,x
-    lda $d700,x
     sta CHARSET+$700,x
     inx
-    bne sc_copy
-    lda CPU_PORT
-    ora #%00000100                     // I/O back
-    sta CPU_PORT
+    bne sc_clear
+    ldx #0
+sc_font:                               // our own font for screen codes $00-$3f
+    lda font_data,x
+    sta CHARSET,x
+    lda font_data+$100,x
+    sta CHARSET+$100,x
+    inx
+    bne sc_font
     ldx #7
 sc_solid:
     lda #$aa                           // all %10: solid brown
@@ -3016,6 +3011,74 @@ sc_custom:
     dex
     bpl sc_custom
     rts
+
+//  font_data: a rounded, chunky 'comic' face for the text (screen codes: A-Z = 1-26,
+//  digits, space and . ! , : / - ? '). Generated, one 8x8 glyph per code, $00-$3f.
+font_data:
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $00 @ (blank)
+    .byte $78, $cc, $cc, $fc, $cc, $cc, $cc, $00     // $01 A
+    .byte $f8, $cc, $f8, $cc, $cc, $cc, $f8, $00     // $02 B
+    .byte $78, $cc, $c0, $c0, $c0, $cc, $78, $00     // $03 C
+    .byte $f8, $cc, $cc, $cc, $cc, $cc, $f8, $00     // $04 D
+    .byte $fc, $c0, $f8, $c0, $c0, $c0, $fc, $00     // $05 E
+    .byte $fc, $c0, $f8, $c0, $c0, $c0, $c0, $00     // $06 F
+    .byte $78, $cc, $c0, $dc, $cc, $cc, $78, $00     // $07 G
+    .byte $cc, $cc, $fc, $cc, $cc, $cc, $cc, $00     // $08 H
+    .byte $78, $30, $30, $30, $30, $30, $78, $00     // $09 I
+    .byte $3c, $18, $18, $18, $d8, $d8, $70, $00     // $0a J
+    .byte $cc, $d8, $f0, $e0, $f0, $d8, $cc, $00     // $0b K
+    .byte $c0, $c0, $c0, $c0, $c0, $c0, $fc, $00     // $0c L
+    .byte $c6, $ee, $fe, $d6, $c6, $c6, $c6, $00     // $0d M
+    .byte $cc, $ec, $fc, $dc, $cc, $cc, $cc, $00     // $0e N
+    .byte $78, $cc, $cc, $cc, $cc, $cc, $78, $00     // $0f O
+    .byte $f8, $cc, $cc, $f8, $c0, $c0, $c0, $00     // $10 P
+    .byte $78, $cc, $cc, $cc, $dc, $cc, $7c, $00     // $11 Q
+    .byte $f8, $cc, $cc, $f8, $f0, $d8, $cc, $00     // $12 R
+    .byte $7c, $c0, $c0, $78, $0c, $0c, $f8, $00     // $13 S
+    .byte $fc, $30, $30, $30, $30, $30, $30, $00     // $14 T
+    .byte $cc, $cc, $cc, $cc, $cc, $cc, $78, $00     // $15 U
+    .byte $cc, $cc, $cc, $cc, $cc, $78, $30, $00     // $16 V
+    .byte $c6, $c6, $c6, $d6, $fe, $ee, $c6, $00     // $17 W
+    .byte $cc, $cc, $78, $30, $78, $cc, $cc, $00     // $18 X
+    .byte $cc, $cc, $78, $30, $30, $30, $30, $00     // $19 Y
+    .byte $fc, $0c, $18, $30, $60, $c0, $fc, $00     // $1a Z
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $1b (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $1c (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $1d (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $1e (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $1f (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $20 (blank)
+    .byte $30, $30, $30, $30, $30, $00, $30, $00     // $21 !
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $22 (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $23 (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $24 (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $25 (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $26 (blank)
+    .byte $60, $60, $40, $00, $00, $00, $00, $00     // $27 '
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $28 (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $29 (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $2a (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $2b (blank)
+    .byte $00, $00, $00, $00, $00, $30, $20, $00     // $2c ,
+    .byte $00, $00, $00, $78, $00, $00, $00, $00     // $2d -
+    .byte $00, $00, $00, $00, $00, $60, $60, $00     // $2e .
+    .byte $0c, $0c, $18, $30, $60, $c0, $c0, $00     // $2f /
+    .byte $78, $cc, $cc, $cc, $cc, $cc, $78, $00     // $30 0
+    .byte $30, $70, $30, $30, $30, $30, $78, $00     // $31 1
+    .byte $78, $cc, $0c, $18, $30, $60, $fc, $00     // $32 2
+    .byte $78, $cc, $0c, $38, $0c, $cc, $78, $00     // $33 3
+    .byte $18, $38, $78, $d8, $fc, $18, $18, $00     // $34 4
+    .byte $fc, $c0, $f8, $0c, $0c, $cc, $78, $00     // $35 5
+    .byte $78, $c0, $f8, $cc, $cc, $cc, $78, $00     // $36 6
+    .byte $fc, $0c, $18, $30, $30, $30, $30, $00     // $37 7
+    .byte $78, $cc, $cc, $78, $cc, $cc, $78, $00     // $38 8
+    .byte $78, $cc, $cc, $7c, $0c, $18, $70, $00     // $39 9
+    .byte $00, $60, $60, $00, $60, $60, $00, $00     // $3a :
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $3b (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $3c (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $3d (blank)
+    .byte $00, $00, $00, $00, $00, $00, $00, $00     // $3e (blank)
+    .byte $78, $cc, $0c, $18, $30, $00, $30, $00     // $3f ?
 
 custom_glyphs:
     .byte $a9, $a9, $a9, $a9, $a9, $a9, $a9, $a9     // wood plank
