@@ -4,14 +4,18 @@ A head-first diving game for the Commodore 64, written in [Kick Assembler](http:
 
 You've jumped off the platform and you're diving head first down a shaft. You're falling down an
 alleyway with brick walls, and ledges stick out of the walls or hang in mid-air across it. Steer left and right to dodge them
-(and the occasional bird); touch either and it's game over.
+(and the occasional bird, which is fatal). **Ledges aren't fatal, but they are a trap:** if one
+reaches your feet you land on it, and the shaft keeps scrolling at the same speed, carrying you
+up the screen with it. You can walk left and right along it (slower than diving sideways); walk
+off the end and you dive again, dropping back to your normal height. Get carried off the top of
+the screen and it's game over, so keep diving.
 Reach the bottom and dive into a big wooden pail of water to win. Miss the pail or clip its rim and it's game over. A counter in the bottom right corner shows how many
 rows are left until the water (about 376 at the start). It counts rows, not seconds, so anvils make it fall faster.
 
 **Score** (bottom left): 10 points every second, 200 for each balloon you touch, and 1000 for
 landing. **Balloons** drift up the screen in front of the ledges, one every 3-6 seconds at a
 random column. Fly into one to pop it. A **bird** flaps across the shaft every 10-17 seconds;
-flying into it is fatal. **Anvils** (small black blocks with a grey top) are planted where they're hard to dodge: a ledge row is planned a few rows early, and if it leaves only one lane to pass through, an anvil goes in that lane two blank rows above the ledge, in the column the diver is heading for (always for a narrow lane, sometimes for a wide one); touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
+flying into it is fatal. **Anvils** (small black blocks with a grey top) are planted where they're hard to dodge: a ledge row is planned a few rows early, and if it leaves only one lane to pass through, a cluster of three anvils goes in that lane, the last two blank rows above the ledge: first in the column the diver is heading for, then the far side of the lane, then the first column again, two rows apart so dodging one means weaving into the next (always for a narrow lane, sometimes for a wide one; picking up several still only adds one step each, up to 3); touch one and it disappears and the fall speeds up by 1 pixel per frame (up to `SPEED_MAX`, 3).
 
 ## Build and run
 
@@ -24,7 +28,7 @@ It starts with a BASIC `SYS` line, so `LOAD "NOSEDIVE",8,1` then `RUN` works too
 
 ## Controls
 
-Joystick in **port 2**: left and right steer the diver, fire starts and restarts the game.
+Joystick in **port 2**: left and right steer the diver (or walk him along a ledge), fire starts and restarts the game.
 
 ## How it works
 
@@ -61,7 +65,8 @@ Joystick in **port 2**: left and right steer the diver, fire starts and restarts
   the +10 score, balloons and birds.
 - **The diver** is hardware sprite 0, held in the middle of the screen, with three animation
   frames played as 0, 1, 2, 1. It moves sideways only.
-- **Collision** uses the VIC sprite-to-background collision register, so it matches exactly
+- **Ledges and landing.** `diver_physics` runs before each scroll step and works out where the shaft will be next frame (`lbase`). Diving, the diver drifts back to `PLAYER_Y`; if a ledge character lies under the middle of his sprite he is snapped to stand on its top and `on_ledge` is set. While standing his Y falls by the scroll speed each frame; if there's no ledge under his feet any more he is diving again, and if his Y goes above `DIVE_TOP_Y` he is dead. Walking uses three frames (stand, two strides) per direction.
+- **Anvils, the pail and walls** use the VIC sprite-to-background collision register, so it matches exactly
   what you see.
 - **The pail.** The screen uses multicolour text with a RAM copy of the character set, plus a few
   redefined characters: brown ledge blocks, wooden planks, an iron hoop, a rim, and two wave
@@ -83,18 +88,20 @@ All the knobs are `.const` lines near the top of `nosedive.asm`:
 | Constant | Default | Meaning |
 |---|---|---|
 | `SCROLL_SPEED` | 1 | pixels per frame the shaft scrolls at the start (anvils raise it, up to `SPEED_MAX` = 3) |
-| `ANVIL_MASK` / `ANVIL_NARROW` / `ANVIL_AHEAD` | 7 / 10 / 2 | a ledge with a wide single lane gets an anvil 1 time in 8 (narrow lanes, fewer than `ANVIL_NARROW` diver positions, always); it sits `ANVIL_AHEAD` blank rows above the ledge. One anvil on screen at a time |
+| `ANVIL_MASK` / `ANVIL_NARROW` / `ANVIL_AHEAD` | 7 / 10 / 2 | a ledge with a wide single lane gets an anvil 1 time in 8 (narrow lanes, fewer than `ANVIL_NARROW` diver positions, always); it sits `ANVIL_AHEAD` blank rows above the ledge. Up to 3 anvils (a cluster) on screen at a time |
 | `COL_WOOD_LIGHT` | 12 | the shared %01 colour (mid grey): anvil tops, ledge edges, pail hoop, brick mortar |
 | `MOVE_SPEED` | 3 | pixels per frame the diver steers sideways |
 | `TIME_LIMIT` | 60 | seconds from jump to ground at the starting speed; the level length (in rows) follows from it |
 | `DISPLAY_OFFSET` | 11 | added to the level's row count to give the HUD counter's start value (it reaches 0 at the water) |
-| `FLOAT_MASK` | 3 | a single ledge floats free when (random AND mask) is 0 (one in four); otherwise it is wall-mounted |
+| `FLOAT_MASK` | 1 | a single ledge floats free when (random AND mask) is 0 (one in two); otherwise it is wall-mounted |
+| `FALL_SPEED` / `WALK_SPEED` / `WALK_ANIM_DELAY` | 3 / 2 / 5 | pixels per frame he drops back to `PLAYER_Y`, pixels per frame he walks on a ledge, frames per walking step |
+| `DIVE_TOP_Y` | 56 | sprite Y above which he is off the top of the screen |
 | `LAND_LEAD` | 10 | rows of lead so the pail's water arrives as the timer hits 0 |
 | `SPLASH_FRAMES` / `SINK_FRAMES` | 100 / 30 | length of the splash scene / frames the shaft keeps scrolling while the diver sinks |
 | `LAND_X_MIN` / `LAND_X_MAX` | 96 / 248 | sprite X range that counts as inside the pail's opening |
 | `DOUBLE_MASK` | 3 | 1 ledge row in (mask+1) has ledges on both walls |
 | `DOUBLE_GAP_MIN` | 6 | narrow gap is this many columns plus 0-3 |
-| `REACH1`-`REACH3` | derived (20, 9+3, 5+3) | how far, in columns, the diver can move between ledge rows at each speed, from `LEDGE_GAP_MIN` and `MOVE_SPEED`. `REACH_SLACK` (3) is added at speeds 2 and 3 on the assumption that the player looks ahead. Wall ledges are never longer than the current reach, so they shrink as an anvil speeds you up |
+| `REACH1`-`REACH3` | derived (20, 9+8, 5+8) | how far, in columns, the diver can move between ledge rows at each speed, from `LEDGE_GAP_MIN` and `MOVE_SPEED`. `REACH_SLACK` (8) is added at speeds 2 and 3 on the assumption that the player looks ahead. Wall ledges are never longer than the current reach, so they shrink as an anvil speeds you up |
 | `WALL_W` | 3 | width of the brick walls in columns |
 | `LEDGE_MIN_LEN` | 12 | shortest ledge in columns (floating: up to 20; wall-mounted: up to 19, within `REACH`) |
 | `MIN_FREE` | 5 | narrowest open space that counts as passable |

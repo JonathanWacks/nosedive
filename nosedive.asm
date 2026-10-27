@@ -91,7 +91,7 @@
 .const MOVE_SPEED     = 3              // pixels per frame the diver steers sideways
 .const TIME_LIMIT     = 60             // seconds from jump to ground
 .const LAND_LEAD      = 10             // rows of lead so the ground arrives as the clock hits 0
-.const FLOAT_MASK     = 3              // a single ledge floats free when (random & mask) is 0 (3 = one in four), else it is mounted on a wall
+.const FLOAT_MASK     = 1              // a single ledge floats free when (random & mask) is 0 (3 = one in four), else it is mounted on a wall
 .const DOUBLE_MASK    = 3              // 1 ledge row in 4 has ledges on both walls
 .const DOUBLE_GAP_MIN = 6              // narrow gap is 6-9 columns wide
 .const TRIES          = 8              // attempts to find a fair ledge row
@@ -106,7 +106,7 @@
 // how far (columns) the diver can get between ledge rows at each speed. The rows between
 // ledges stay the same, so a faster fall leaves less time and the ledges get harder to
 // avoid; REACH_SLACK is how much of that the player is expected to make up by looking ahead.
-.const REACH_SLACK    = 3
+.const REACH_SLACK    = 8
 .const REACH1         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 1 * MOVE_SPEED / 8) - 2
 .const REACH2         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 2 * MOVE_SPEED / 8) - 2 + REACH_SLACK
 .const REACH3         = floor(((LEDGE_GAP_MIN + 1)*8 - 29) / 3 * MOVE_SPEED / 8) - 2 + REACH_SLACK
@@ -131,8 +131,8 @@
 .const BIRD_Y_MASK    = 63             // ... up to this much lower
 .const BIRD_RISE      = 1              // pixels per frame it rises (same as the scroll, so it drifts up the shaft)
 .const BIRD_Y_TOP     = 50             // gone once it has risen above this
-.const BIRD_HIT_Y_MIN = 128            // bird sprite Y range that overlaps the diver
-.const BIRD_HIT_Y_MAX = 153
+.const BIRD_HIT_ABOVE = 12             // bird sprite Y this far above the diver's ...
+.const BIRD_HIT_BELOW = 13             // ... to this far below it overlaps him
 .const BIRD_HIT_DX    = 18             // and how many pixels sideways
 .const BALLOON_START_Y = 247           // just below the window: rises into view
 .const BALLOON_TOP    = 34             // gone once fully above the window
@@ -145,8 +145,8 @@
 .const SINK_FRAMES    = 30             // the shaft keeps scrolling this long: diver sinks
 .const SURFACE_Y      = 159            // screen Y of the water when the diver touches it
 .const WAVE_DELAY     = 8              // frames per water ripple step
-.const HIT_Y_MIN      = 127            // balloon sprite Y range that overlaps the diver
-.const HIT_Y_MAX      = 160
+.const HIT_ABOVE      = 13             // balloon sprite Y this far above the diver's ...
+.const HIT_BELOW      = 20             // ... to this far below it overlaps him
 .const HIT_DX         = 20             // and how many pixels sideways
 .const HUD_Y          = 228            // HUD sprites sit on the bottom rows
 .const SCORE_X        = 28
@@ -155,7 +155,11 @@
 .const ROWS_PAL       = floor(TIME_LIMIT*50*SCROLL_SPEED/8) - LAND_LEAD
 .const DISPLAY_OFFSET  = 11             // rows from the bottom of the screen to the diver's level: the counter hits 0 as the water arrives
 .const ROWS_NTSC      = floor(TIME_LIMIT*60*SCROLL_SPEED/8) - LAND_LEAD
-.const PLAYER_Y       = 140            // sprite Y: vertically centred in the window
+.const PLAYER_Y       = 140            // sprite Y while diving: vertically centred in the window
+.const FALL_SPEED     = 3              // pixels per frame he drops back to PLAYER_Y after leaving a ledge
+.const WALK_SPEED     = 2              // pixels per frame he walks along a ledge
+.const WALK_ANIM_DELAY = 5             // frames per walking step
+.const DIVE_TOP_Y     = 56             // carried above this (sprite Y) = off the top of the screen: dead
 .const PLAYER_X_START = 172            // sprite X: horizontally centred
 .const X_MIN          = 24 + 8*WALL_W  // leftmost sprite X: against the left wall
 .const X_MAX          = 320 - 8*WALL_W // rightmost sprite X: against the right wall
@@ -294,12 +298,12 @@ flying_frame:
     lda VIC_SPR_BGHIT
     and #1
     beq still_flying
-    lda ground_seen
-    bne hit_pail
     jsr take_anvils                    // touching an anvil? take it and speed up
     bcs still_flying
-    jmp crashed                        // a ledge: ouch
-hit_pail:
+    lda ground_seen
+    beq still_flying                   // ledges are not dangerous: he lands on them
+    lda on_ledge
+    bne still_flying
     jsr in_opening                     // the pail: did we hit the water?
     bcc crash_far                      // rim, wall or floor: ouch
     jmp start_splash
@@ -308,6 +312,10 @@ crash_far:
 
 still_flying:
     jsr move_diver
+    jsr diver_physics                  // carry set = carried off the top of the screen
+    bcc physics_ok
+    jmp crashed
+physics_ok:
     jsr animate_diver
     jsr animate_water
     jsr update_timer
@@ -326,14 +334,18 @@ bird_ok:
 //  the touch was a pick-up rather than a crash.
 // ----------------------------------------------------------------------------
 take_anvils:
-    lda #(PLAYER_Y - 48)               // text rows the sprite covers
+    lda diver_y                        // text rows the sprite covers
+    sec
+    sbc #48
     sec
     sbc yscroll
     lsr
     lsr
     lsr
     sta ta_row
-    lda #(PLAYER_Y + 20 - 48)
+    lda diver_y
+    clc
+    adc #(20 - 48)
     sec
     sbc yscroll
     lsr
@@ -375,7 +387,29 @@ ta_cell:
     inc ta_hit
     tya                                // the colour goes back too
     pha
-    jsr anvil_unpaint
+    lda #25                            // which anvil was it? Same column and the age it
+    sec                                // would have by now, this far up the screen
+    sbc ta_row
+    sta tmpv2
+    ldx #2
+ta_slot:
+    tya
+    cmp anv_col,x
+    bne ta_next_slot
+    lda anv_age,x
+    sec
+    sbc tmpv2
+    clc
+    adc #1
+    cmp #3                             // within one
+    bcc ta_found
+ta_next_slot:
+    dex
+    bpl ta_slot
+    bmi ta_after
+ta_found:
+    jsr anvil_free_slot
+ta_after:
     jsr speed_up
     pla
     tay
@@ -585,15 +619,18 @@ iw_c:
     jsr put_wave                       // water ripple back to its first shape
     lda #START_GAP
     sta ledge_wait
+    ldx #2                             // no anvils
     lda #$ff
-    sta anv_col
+ig_anv:
+    sta anv_col,x
+    sta anv_plan,x
+    dex
+    bpl ig_anv
     lda #1
     sta after_ledge                    // the first gap row plans the first ledge
     lda #0
     sta wall_side
     sta plan_ok
-    lda #$ff
-    sta anv_plan
     lda #SCROLL_SPEED                  // anvils change this during a run
     sta speed
     jsr set_reach
@@ -664,6 +701,14 @@ init_balloons:
     sta player_x_hi
     lda #PLAYER_Y
     sta VIC_SPR0_Y
+    sta diver_y
+    lda #0
+    sta on_ledge
+    sta facing
+    sta moving
+    sta walk_anim
+    lda #WALK_ANIM_DELAY
+    sta walk_timer
     jsr update_sprite_x
     lda #(sprite_frames/64)
     sta SPRITE_PTR
@@ -687,12 +732,23 @@ update_sprite_x:
 //  move_diver: joystick left/right moves the diver, clamped to the screen
 // ----------------------------------------------------------------------------
 move_diver:
+    lda #MOVE_SPEED                    // walking on a ledge is slower than diving sideways
+    ldx on_ledge
+    beq mv_speed_ok
+    lda #WALK_SPEED
+mv_speed_ok:
+    sta mv_speed
+    lda #0
+    sta moving
     lda CIA1_PORT_A
     and #$04                           // bit 2 clear = left
     bne check_right
+    lda #1
+    sta facing                         // 1 = facing left
+    sta moving
     sec
     lda player_x_lo
-    sbc #MOVE_SPEED
+    sbc mv_speed
     sta player_x_lo
     lda player_x_hi
     sbc #0
@@ -708,9 +764,13 @@ check_right:
     lda CIA1_PORT_A
     and #$08                           // bit 3 clear = right
     bne move_done
+    lda #0
+    sta facing
+    lda #1
+    sta moving
     clc
     lda player_x_lo
-    adc #MOVE_SPEED
+    adc mv_speed
     sta player_x_lo
     lda player_x_hi
     adc #0
@@ -730,6 +790,36 @@ move_done:
 //  flapping in the rush of air
 // ----------------------------------------------------------------------------
 animate_diver:
+    lda on_ledge
+    beq ad_dive
+    lda moving                         // standing on a ledge: walk or stand
+    beq ad_stand
+    dec walk_timer
+    bne ad_wshow
+    lda #WALK_ANIM_DELAY
+    sta walk_timer
+    lda walk_anim
+    clc
+    adc #1
+    and #3
+    sta walk_anim
+ad_wshow:
+    ldx walk_anim
+    lda walk_seq,x
+    jmp ad_wptr
+ad_stand:
+    lda #0
+ad_wptr:
+    ldx facing
+    beq ad_wright
+    clc
+    adc #3                             // second set of frames faces left
+ad_wright:
+    clc
+    adc #(walk_frames/64)
+    sta SPRITE_PTR
+    rts
+ad_dive:
     dec anim_timer
     bne anim_show
     lda #ANIM_DELAY
@@ -749,6 +839,145 @@ anim_show:
 
 anim_sequence:
     .byte 0, 1, 2, 1
+walk_seq:
+    .byte 0, 1, 0, 2
+
+// ----------------------------------------------------------------------------
+//  diver_physics: vertical movement. Diving, he sits at PLAYER_Y while the shaft
+//  scrolls past. If a ledge reaches his feet he lands and is carried up with it;
+//  walking off its end drops him back to PLAYER_Y. Carried above DIVE_TOP_Y he is
+//  dead. Everything is worked out for the NEXT frame's scroll position (the shaft
+//  moves up `speed` pixels), so the sprite and the shaft stay in step.
+//  Returns carry set if dead.
+// ----------------------------------------------------------------------------
+diver_physics:
+    lda yscroll                        // lbase: screen line of row 0 next frame
+    clc
+    adc #48
+    sec
+    sbc speed
+    sta lbase
+    lda #18                            // columns under the middle of the sprite
+    jsr x_to_col
+    sta c_lo
+    lda #7
+    jsr x_to_col
+    sta c_hi
+    lda on_ledge
+    bne dp_stand
+
+    lda diver_y                        // diving: drift back down to PLAYER_Y
+    clc
+    adc #FALL_SPEED
+    cmp #(PLAYER_Y + 1)
+    bcc dp_fall_ok
+    lda #PLAYER_Y
+dp_fall_ok:
+    sta tmpv2                          // where he would be
+    sec                                // first and last text row his body overlaps
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta dp_row
+    lda tmpv2
+    clc
+    adc #20
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    sta dp_last
+dp_scan:
+    ldx dp_row
+    cpx #25
+    bcs dp_clear
+    jsr scan_row
+    bcs dp_land
+    inc dp_row
+    lda dp_row
+    cmp dp_last
+    beq dp_scan
+    bcc dp_scan
+dp_clear:
+    lda tmpv2                          // nothing in the way
+    sta diver_y
+    jmp dp_show
+dp_land:
+    lda dp_row                         // stand on top of that ledge row
+    asl
+    asl
+    asl
+    clc
+    adc lbase
+    sec
+    sbc #21
+    sta diver_y
+    lda #1
+    sta on_ledge
+    lda #0
+    sta walk_anim
+    jmp dp_show
+
+dp_stand:
+    lda diver_y                        // carried up with the ledge
+    sec
+    sbc speed
+    sta tmpv2
+    cmp #DIVE_TOP_Y
+    bcs dp_alive
+    sec                                // off the top of the screen
+    rts
+dp_alive:
+    clc                                // the row just under his feet
+    adc #21
+    sec
+    sbc lbase
+    lsr
+    lsr
+    lsr
+    tax
+    cpx #25
+    bcs dp_off
+    jsr scan_row
+    bcs dp_still
+dp_off:
+    lda #0                             // walked off the end: dive again
+    sta on_ledge
+dp_still:
+    lda tmpv2
+    sta diver_y
+dp_show:
+    sta VIC_SPR0_Y
+    clc
+    rts
+
+// scan_row: X = text row. Carry set if there is a ledge character in columns c_lo..c_hi
+scan_row:
+    lda row_lo,x
+    sta ptr_dst
+    lda row_hi,x
+    sta ptr_dst+1
+    ldy c_lo
+sr_loop:
+    lda (ptr_dst),y
+    cmp #CH_LEDGE
+    beq sr_yes
+    iny
+    cpy c_hi
+    beq sr_loop
+    bcc sr_loop
+    clc
+    rts
+sr_yes:
+    sec
+    rts
+
+row_lo:
+    .byte 0, 40, 80, 120, 160, 200, 240, 24, 64, 104, 144, 184, 224, 8, 48, 88, 128, 168, 208, 248, 32, 72, 112, 152, 192
+row_hi:
+    .byte 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7
 
 // ----------------------------------------------------------------------------
 //  scroll_shaft: move everything up SCROLL_SPEED pixels. When the fine scroll
@@ -875,14 +1104,23 @@ nr_rl:
     lda #1
     sta time_dirty
 nr_rows_done:
-    lda anv_col                        // age the anvil; it has scrolled off after 26 rows
+    ldx #2                             // age the anvils; one has scrolled off after 26 rows
+nr_age:
+    lda anv_col,x
     cmp #$ff
-    beq nr_done
-    inc anv_age
-    lda anv_age
+    beq nr_age_next
+    inc anv_age,x
+    lda anv_age,x
     cmp #26
-    bcc nr_done
-    jmp anvil_unpaint
+    bcc nr_age_next
+    txa
+    pha
+    jsr anvil_free_slot
+    pla
+    tax
+nr_age_next:
+    dex
+    bpl nr_age
 nr_done:
     rts
 
@@ -1012,27 +1250,51 @@ maybe_anvil:
     sta after_ledge
     jmp plan_ledge
 ma_place:
-    lda anv_plan
+    lda anv_plan                       // anything planned?
+    and anv_plan+1
+    and anv_plan+2
     cmp #$ff
     beq ma_no
-    lda ledge_wait
-    cmp #ANVIL_AHEAD
-    bne ma_no
-    ldx anv_plan
-    lda #$ff
-    sta anv_plan
-    lda anv_col                        // one anvil at a time
+    ldx #2
+ma_loop:
+    lda anv_plan,x
     cmp #$ff
-    bne ma_no
-    stx anv_col
+    beq ma_next
+    lda anv_when,x                     // is it this row's turn?
+    cmp ledge_wait
+    bne ma_next
+    lda anv_col,x                      // (slot still in use: skip it)
+    cmp #$ff
+    bne ma_drop
+    lda anv_plan,x
+    sta anv_col,x
+    tay
     lda #CH_ANVIL
-    sta row_buf,x
+    sta row_buf,y
     lda #0
-    sta anv_age
-    lda #ANVIL_CELL                    // the anvil's column is painted black while it exists
-    jmp anvil_paint
+    sta anv_age,x
+    lda #$ff
+    sta anv_plan,x
+    txa
+    pha
+    tya
+    tax
+    lda #ANVIL_CELL                    // its column is painted black while it exists
+    jsr anvil_paint
+    pla
+    tax
+    jmp ma_next
+ma_drop:
+    lda #$ff
+    sta anv_plan,x
+ma_next:
+    dex
+    bpl ma_loop
 ma_no:
     rts
+
+anv_when:
+    .byte ANVIL_AHEAD + 4, ANVIL_AHEAD + 2, ANVIL_AHEAD   // blank rows left below each
 
 // plan_ledge: choose the next ledge row now (pick, check reach, retry), so it is known
 // while the gap rows are built. plan_ok = 0 if nothing fair was found.
@@ -1041,6 +1303,8 @@ plan_ledge:
     sta plan_ok
     lda #$ff
     sta anv_plan
+    sta anv_plan+1
+    sta anv_plan+2
     lda #TRIES
     sta tries
 pl_try:
@@ -1096,35 +1360,52 @@ pl_far:
     and #ANVIL_MASK
     bne pl_done
 pl_go:
+    lda plan_ca                        // lane, as a range of centre columns
+    clc
+    adc #1
+    sta pl_lo
+    lda plan_cb
+    clc
+    adc #1
+    sta pl_hi
     lda #24
     jsr x_to_col                       // diver's left column
     clc
     adc #1                             // his middle column
-    ldx plan_ca
-    inx
-    stx tmpv
-    cmp tmpv
+    cmp pl_lo
     bcs pl_lo_ok
-    lda tmpv
+    lda pl_lo
 pl_lo_ok:
-    ldx plan_cb
-    inx
-    stx tmpv
-    cmp tmpv
+    cmp pl_hi
     bcc pl_hi_ok
     beq pl_hi_ok
-    lda tmpv
+    lda pl_hi
 pl_hi_ok:
-    sta anv_plan
+    sta anv_plan                       // a cluster of three: where he is heading, then the
+    sta anv_plan+2                     // far side of the lane, then there again
+    sec
+    sbc pl_lo
+    sta tmpv                           // room to the left
+    lda pl_hi
+    sec
+    sbc anv_plan
+    cmp tmpv                           // room to the right
+    bcs pl_right
+    lda pl_lo
+    jmp pl_second
+pl_right:
+    lda pl_hi
+pl_second:
+    sta anv_plan+1
 pl_done:
     rts
 
-// anvil_paint: A = colour RAM value; fill the anvil's column with it
+// anvil_paint: A = colour RAM value, X = column; fill that column with it
 anvil_paint:
     sta ta_x
-    lda #<COLOR_RAM
+    txa
     clc
-    adc anv_col
+    adc #<COLOR_RAM
     sta ptr_col
     lda #>COLOR_RAM
     adc #0
@@ -1145,16 +1426,26 @@ ap_nc:
     bne ap_loop
     rts
 
-// anvil_unpaint: restore the column's colour and forget the anvil
-anvil_unpaint:
-    lda anv_col
+// anvil_free_slot: X = anvil slot. Forget it and restore its column's colour, unless
+// another anvil of the cluster is still using that column.
+anvil_free_slot:
+    lda anv_col,x
     cmp #$ff
-    beq au_done
-    lda #CELL_COLOUR
-    jsr anvil_paint
+    beq af_done
+    sta tmpv
     lda #$ff
-    sta anv_col
-au_done:
+    sta anv_col,x
+    ldy #2
+af_chk:
+    lda anv_col,y
+    cmp tmpv
+    beq af_done
+    dey
+    bpl af_chk
+    ldx tmpv
+    lda #CELL_COLOUR
+    jmp anvil_paint
+af_done:
     rts
 
 // ----------------------------------------------------------------------------
@@ -1807,9 +2098,11 @@ ub_loop:
     jmp ub_next
 ub_alive:
     sta b_y,x
-    cmp #HIT_Y_MIN                     // level with the diver?
-    bcc ub_show
-    cmp #(HIT_Y_MAX+1)
+    sec                                // level with the diver?
+    sbc diver_y
+    clc
+    adc #HIT_ABOVE
+    cmp #(HIT_ABOVE + HIT_BELOW + 1)
     bcs ub_show
     sec                                // balloon X minus diver X (9 bit)
     lda b_xl,x
@@ -2098,9 +2391,11 @@ bird_ptr:
     sta bird_msb
 bird_hit_test:
     lda bird_ysc                       // level with the diver?
-    cmp #BIRD_HIT_Y_MIN
-    bcc bird_miss
-    cmp #(BIRD_HIT_Y_MAX + 1)
+    sec
+    sbc diver_y
+    clc
+    adc #BIRD_HIT_ABOVE
+    cmp #(BIRD_HIT_ABOVE + BIRD_HIT_BELOW + 1)
     bcs bird_miss
     sec                                // bird X minus diver X (9 bit)
     lda bird_xl
@@ -2487,8 +2782,10 @@ txt_retry:
 // ----------------------------------------------------------------------------
 speed:          .byte SCROLL_SPEED     // pixels per frame the shaft scrolls now
 reach_p1:       .byte REACH1 + 1       // REACH + 1
-anv_col:        .byte $ff              // column of the anvil on screen ($ff = none)
-anv_age:        .byte 0                // shifts since it arrived
+anv_col:        .byte $ff, $ff, $ff    // columns of the cluster's anvils on screen ($ff = none)
+anv_age:        .byte 0, 0, 0          // shifts since each arrived
+pl_lo:          .byte 0
+pl_hi:          .byte 0
 wall_side:      .byte 0                // side of the last wall ledge: 0 = left, 1 = right
 cand_side:      .byte 0                // same for the candidate row ($ff = not a wall ledge)
 plan_ok:        .byte 0                // 1 = a ledge row is planned
@@ -2500,7 +2797,7 @@ plan_cn:        .byte 0
 plan_ca:        .byte 0, 0
 plan_cb:        .byte 0, 0
 plan_side:      .byte 0
-anv_plan:       .byte $ff              // column planned for the next anvil ($ff = none)
+anv_plan:       .byte $ff, $ff, $ff    // columns planned for the next cluster ($ff = none)
 after_ledge:    .byte 0                // 1 = the previous row was a ledge row
 ta_row:         .byte 0
 ta_last:        .byte 0
@@ -2508,6 +2805,18 @@ ta_c0:          .byte 0
 ta_c1:          .byte 0
 ta_hit:         .byte 0
 ta_x:           .byte 0
+diver_y:        .byte PLAYER_Y         // sprite Y of the diver
+on_ledge:       .byte 0                // 1 = standing on a ledge
+facing:         .byte 0                // 0 = right, 1 = left
+moving:         .byte 0                // joystick left/right held this frame
+walk_anim:      .byte 0
+walk_timer:     .byte 0
+mv_speed:       .byte MOVE_SPEED
+lbase:          .byte 0                // screen line of text row 0 on the next frame
+c_lo:           .byte 0                // text columns under the middle of the diver
+c_hi:           .byte 0
+dp_row:         .byte 0
+dp_last:        .byte 0
 yscroll:        .byte 0                // current vertical fine scroll, 0-7
 anim_timer:     .byte 0
 anim_index:     .byte 0
@@ -2909,4 +3218,146 @@ bird_frames:
 .byte %00000000, %00000000, %00000000   // ........................
 .byte 0
 
-.errorif bird_frames + 384 > CHARSET, "Sprite data must end before the character set at $2800"
+
+// The diver standing and walking on a ledge: facing right (stand, stride A, stride B), then left
+walk_frames:
+// right, standing
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %01111111, %00000000   // .........#######........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %11111111, %00000000   // ........########........
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000001, %10011110, %01100000   // .......##..####..##.....
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %01110111, %00000000   // .........###.###........
+.byte 0
+// right, stride A
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %01111111, %00000000   // .........#######........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %11111111, %00000000   // ........########........
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000001, %10011110, %01100000   // .......##..####..##.....
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %11000011, %00000000   // ........##....##........
+.byte %00000000, %11000011, %00000000   // ........##....##........
+.byte %00000001, %10000001, %10000000   // .......##......##.......
+.byte %00000001, %10000001, %10000000   // .......##......##.......
+.byte %00000011, %10000001, %11000000   // ......###......###......
+.byte 0
+// right, stride B
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %01111111, %00000000   // .........#######........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %11111111, %00000000   // ........########........
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000001, %10011110, %01100000   // .......##..####..##.....
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %01110111, %00000000   // .........###.###........
+.byte 0
+// left, standing
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %11111110, %00000000   // ........#######.........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %11111111, %00000000   // ........########........
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000110, %01111001, %10000000   // .....##..####..##.......
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %00100100, %00000000   // ..........#..#..........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %11101110, %00000000   // ........###.###.........
+.byte 0
+// left, stride A
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %11111110, %00000000   // ........#######.........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %11111111, %00000000   // ........########........
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000110, %01111001, %10000000   // .....##..####..##.......
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %11000011, %00000000   // ........##....##........
+.byte %00000000, %11000011, %00000000   // ........##....##........
+.byte %00000001, %10000001, %10000000   // .......##......##.......
+.byte %00000001, %10000001, %10000000   // .......##......##.......
+.byte %00000011, %10000001, %11000000   // ......###......###......
+.byte 0
+// left, stride B
+.byte %00000000, %00000000, %00000000   // ........................
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %11111110, %00000000   // ........#######.........
+.byte %00000000, %01111110, %00000000   // .........######.........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00011000, %00000000   // ...........##...........
+.byte %00000000, %11111111, %00000000   // ........########........
+.byte %00000001, %11111111, %10000000   // .......##########.......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000011, %11011011, %11000000   // ......####.##.####......
+.byte %00000110, %01111001, %10000000   // .....##..####..##.......
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %00111100, %00000000   // ..........####..........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %01100110, %00000000   // .........##..##.........
+.byte %00000000, %11101110, %00000000   // ........###.###.........
+.byte 0
+
+.errorif walk_frames + 384 > CHARSET, "Sprite data must end before the character set at $2800"
