@@ -32,7 +32,7 @@
 //  Hardware addresses
 // ----------------------------------------------------------------------------
 .const SCREEN         = $0400
-.const CHARSET        = $2800          // our RAM copy of the character set
+.const CHARSET        = $3800          // our RAM copy of the character set
 .const CPU_PORT       = $01            // bit 2 = I/O visible (0 = character ROM)
 .const COLOR_RAM      = $d800
 .const SPRITE_PTR     = $07f8          // sprite 0 data pointer
@@ -227,11 +227,11 @@ start:
     // Character set: ROM copy in RAM plus our own ledge/pail characters
     jsr setup_charset
 
-    // VIC: 40 columns, multicolour text, screen at $0400, characters at $2800.
+    // VIC: 40 columns, multicolour text, screen at $0400, characters at $3800.
     // Game cells are multicolour; text cells (colour 0-7) stay hi-res.
     lda #$d8
     sta VIC_CTRL2
-    lda #$1a
+    lda #$1e                           // screen $0400, characters $3800
     sta VIC_MEMORY
     lda #COL_WOOD_LIGHT
     sta VIC_MC1
@@ -3343,9 +3343,11 @@ player_x_hi:    .byte 0
 // ----------------------------------------------------------------------------
 //  Diver sprite: three 24x21 frames, head pointing down the screen.
 //  Sprite data must be 64-byte aligned and outside $1000-$1fff, where the VIC
-//  sees the character ROM instead of RAM. $2000 up is fine.
+//  sees the character ROM instead of RAM. Placed at $3000 so the program can use
+//  everything from $0801 up to there.
+
 // ----------------------------------------------------------------------------
-* = $2000 "Sprites"
+* = $3000 "Sprites"
 sprite_frames:
 // frame 0
 .byte %00000110, %00000000, %01100000   // .....##..........##.....
@@ -3794,4 +3796,4 @@ walk_frames:
 .byte %00000000, %11101110, %00000000   // ........###.###.........
 .byte 0
 
-.errorif walk_frames + 384 > CHARSET, "Sprite data must end before the character set at $2800"
+.errorif walk_frames + 384 > CHARSET, "Sprite data must end before the character set at $3800"
